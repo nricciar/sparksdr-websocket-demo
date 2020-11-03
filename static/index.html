@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Logbook</title>
+        <script defer src="https://use.fontawesome.com/releases/v5.3.1/js/all.js"></script>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.0/css/bulma.min.css">
+        <script type="module">
+            import init from "./wasm.js"
+            init()
+        </script>
+        <style type="text/css">
+        .receiver-control {
+            border:2px solid #555;
+            width: 15em;
+            padding:10px;
+            margin:10px;
+            float:left;
+        }
+        form.selected {
+            background-color: #ebebeb;
+        }
+        .receiver-control .frequency, .receiver-control .up-controls,.receiver-control .down-controls {
+            font-family: "Courier New", Courier, monospace !important;
+            font-size: 32px !important;
+            text-align:center;
+        }
+        .receiver-control .frequency span {
+            color: #cecece;
+        }
+        .receiver-control .frequency .active {
+            font-weight: bold;
+            color: #555 !important;
+        }
+        .receiver-control select { 
+            background-color: #fff;
+            border:1px solid #cecece;
+        }
+        #frequency {
+            margin-top:-0.5em;
+        }
+        .receiver-control .up-controls {
+            position: relative;
+            z-index:20;
+            top:-0.7em;
+        }
+        .receiver-control .down-controls {
+            position: relative;
+            z-index:20;
+            top:-0.9em;
+        }
+        .receiver-control .up-controls,.receiver-control .up-controls a,.receiver-control .down-controls,.receiver-control .down-controls a {
+            color:transparent;
+            height:10px;
+        }
+        </style>
+    </head>
+    <body></body>
+</html>
