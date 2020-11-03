@@ -12,21 +12,47 @@ pub struct Receiver {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Radio {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Name")]
+    pub name: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Version {
+    #[serde(rename = "ProtocolVersion")]
+    pub protocol_version: String,
+    #[serde(rename = "Host")]
+    pub host: String,
+    #[serde(rename = "HostVersion")]
+    pub host_version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
 pub enum CommandResponse {
     #[serde(rename = "getReceiversResponse")]
-    Receivers{ Receivers: Vec<Receiver> } 
+    Receivers{ Receivers: Vec<Receiver> },
+    #[serde(rename = "getVersionResponse")]
+    Version(Version),
+    #[serde(rename = "getRadiosResponse")]
+    Radios{ Radios: Vec<Radio> }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "cmd")]
 pub enum Command {
-    getReceivers,
-    setFrequency(f32),
-    setMode(Mode)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CommandMessage {
-    pub cmd: Command,
-    pub receiver: Option<Uuid>,
+    #[serde(rename = "getReceivers")]
+    GetReceivers,
+    #[serde(rename = "setFrequency")]
+    SetFrequency{ Frequency: String, ID: Uuid },
+    #[serde(rename = "setMode")]
+    SetMode{ Mode: Mode, ID: Uuid },
+    #[serde(rename = "getVersion")]
+    GetVersion,
+    #[serde(rename = "getRadios")]
+    GetRadios,
+    #[serde(rename = "addReceiver")]
+    AddReceiver{ ID: Uuid }
 }

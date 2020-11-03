@@ -37,7 +37,9 @@ pub struct Model {
     ws: Option<WebSocketTask>,
     wss: WebSocket,
     receivers: Vec<Receiver>,
+    radios: Vec<Radio>,
     default_receiver: Option<Uuid>,
+    version: Option<Version>
 }
 
 enum WebsocketMsgType {
@@ -55,6 +57,7 @@ pub enum Msg {
     FrequencyDown(Uuid, i32), // digit 0 - 8
     ModeChanged(Uuid, Mode),
     SetDefaultReceiver(Uuid),
+    AddReceiver(Uuid),
     ReceivedAudio(js_sys::ArrayBuffer),
     None,
 }
@@ -69,18 +72,26 @@ impl Component for Model {
                 match msg {
                     CommandResponse::Receivers { Receivers: receivers } => {
                         self.receivers = receivers;
+                    },
+                    CommandResponse::Radios { Radios: radios } => {
+                        self.radios = radios;
+                    },
+                    CommandResponse::Version(version) => {
+                        self.version = Some(version);
                     }
                 }
             },
             Msg::SetDefaultReceiver(receiver_id) => {
                 self.default_receiver = Some(receiver_id);
             },
+            Msg::AddReceiver(radio_id) => {
+                self.send_command(Command::AddReceiver { ID: radio_id });
+                self.send_command(Command::GetReceivers);
+            },
             Msg::ModeChanged(receiver_id, mode) => {
                 if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
                     self.receivers[index].mode = mode.clone();
-                    let cmd = CommandMessage { cmd: Command::setMode(mode.clone()), receiver: Some(receiver_id) };
-                    let j = serde_json::to_string(&cmd).unwrap();
-                    self.wss.send_with_str(&j).unwrap();
+                    self.send_command(Command::SetMode { Mode: mode.clone(), ID: receiver_id });
                 }
             },
             Msg::FrequencyDown(receiver_id, digit) => {
@@ -95,9 +106,7 @@ impl Component for Model {
                     if digit == 7 { self.receivers[index].frequency -= 10.0 }
                     if digit == 8 { self.receivers[index].frequency -= 1.0 }
 
-                    let cmd = CommandMessage { cmd: Command::setFrequency(self.receivers[index].frequency), receiver: Some(receiver_id) };
-                    let j = serde_json::to_string(&cmd).unwrap();
-                    self.wss.send_with_str(&j).unwrap();
+                    self.send_command(Command::SetFrequency { Frequency: (self.receivers[index].frequency as i32).to_string(), ID: receiver_id });
                 }
             },
             Msg::FrequencyUp(receiver_id, digit) => {
@@ -112,9 +121,7 @@ impl Component for Model {
                     if digit == 7 { self.receivers[index].frequency += 10.0 }
                     if digit == 8 { self.receivers[index].frequency += 1.0 }
 
-                    let cmd = CommandMessage { cmd: Command::setFrequency(self.receivers[index].frequency), receiver: Some(receiver_id) };
-                    let j = serde_json::to_string(&cmd).unwrap();
-                    self.wss.send_with_str(&j).unwrap();
+                    self.send_command(Command::SetFrequency { Frequency: (self.receivers[index].frequency as i32).to_string(), ID: receiver_id });
                 }
             }
             Msg::ReceivedText(Err(err)) => {
@@ -125,11 +132,9 @@ impl Component for Model {
                 self.console.log("Disconnected");
             },
             Msg::Connected => {
-                let cmd = CommandMessage { cmd: Command::getReceivers, receiver: None };
-                let j = serde_json::to_string(&cmd).unwrap();
-                let msg = format!("sent: {}", j);
-                self.console.log(&msg);
-                self.wss.send_with_str(&j).unwrap();
+                self.send_command(Command::GetReceivers);
+                self.send_command(Command::GetRadios);
+                self.send_command(Command::GetVersion);
             },
             Msg::ReceivedAudio(data) => {
                 // TODO: do stuff
@@ -245,7 +250,9 @@ impl Component for Model {
             wss: ws,
             ws: None,
             receivers: vec![],
-            default_receiver: None
+            radios: vec![],
+            default_receiver: None,
+            version: None
         }
     }
 
@@ -256,9 +263,25 @@ impl Component for Model {
     fn view(&self) -> Html {
         html! {
             <>
+                { for self.radios.iter().map(|r| {
+                    self.radio(&r)
+                  })
+                }
+
+                <div style="clear:both"></div>
+
                 { for self.receivers.iter().map(|r| {
                     self.receiver(&r)
                   })
+                }
+
+                <div style="clear:both"></div>
+
+                {
+                    match &self.version {
+                        Some(version) => html! { <p class="version">{ format!("{} {} [Protocol Version: {}]", version.host, version.host_version, version.protocol_version) }</p> },
+                        None => html! {},
+                    }
                 }
             </>
         }
@@ -266,6 +289,23 @@ impl Component for Model {
 }
 
 impl Model {
+    fn send_command(&mut self, cmd: Command) {
+        let j = serde_json::to_string(&cmd).unwrap();
+        let msg = format!("sent: {}", j);
+        self.console.log(&msg);
+        self.wss.send_with_str(&j).unwrap();
+    }
+
+    fn radio(&self, radio: &Radio) -> Html {
+        let radio_id = radio.id;
+        html! {
+            <div class="radio-control">
+                { radio.name.to_string() }
+                <input type="button" value="Add Receiver" onclick=self.link.callback(move |_| Msg::AddReceiver(radio_id) ) />
+            </div>
+        }
+    }
+
     fn receiver(&self, receiver: &Receiver) -> Html {
         let frequency_string = format!("{:0>9}", receiver.frequency.to_string());
         let tmp = self.decimal_mark(frequency_string);
