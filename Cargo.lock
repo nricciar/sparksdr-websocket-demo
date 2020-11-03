@@ -250,7 +250,7 @@ dependencies = [
 [[package]]
 name = "ham-rs"
 version = "0.1.0"
-source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#4fba8394d62989e7e1389f14160b9ff72d65d49b"
+source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#ee281b7bcf463827e747e868339174a8aadeff28"
 dependencies = [
  "adif 0.1.0 (git+https://github.com/davepacheco/rust-adif.git)",
  "chrono 0.4.19 (registry+https://github.com/rust-lang/crates.io-index)",

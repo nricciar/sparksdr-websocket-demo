@@ -1,26 +1,20 @@
 #![recursion_limit = "2048"]
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
 use anyhow::Error;
 use wasm_bindgen::prelude::*;
 use yew::prelude::*;
 use yew::services::ConsoleService;
 use yew::{html, Component, ComponentLink, Html, ShouldRender};
 use yew_router::{route::Route, service::RouteService};
-use yew_router::{prelude::*, Switch};
-use yew::format::{Json,Text,Binary,Nothing};
-use yew::services::fetch::{FetchService, FetchTask, Request, Response};
-use yew::services::websocket::{WebSocketService, WebSocketStatus, WebSocketTask};
+use yew_router::{Switch};
+use yew::format::{Json};
+//use yew::services::fetch::{FetchService, FetchTask, Request, Response};
+use yew::services::websocket::{WebSocketStatus};//, WebSocketTask};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use wasm_bindgen::JsCast;
 use uuid::Uuid;
 use std::str;
 
-use ham_rs::rig::{RECEIVER_MODES,Mode};
-
-mod model;
-use model::*;
+use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode};
 
 #[derive(Clone,Switch, Debug)]
 pub enum AppRoute {
@@ -33,8 +27,8 @@ pub struct Model {
     route: Route<()>,
     link: ComponentLink<Self>,
     console: ConsoleService,
-    ft: Option<FetchTask>,
-    ws: Option<WebSocketTask>,
+    //ft: Option<FetchTask>,
+    //ws: Option<WebSocketTask>,
     wss: WebSocket,
     receivers: Vec<Receiver>,
     radios: Vec<Radio>,
@@ -136,7 +130,7 @@ impl Component for Model {
                 self.send_command(Command::GetRadios);
                 self.send_command(Command::GetVersion);
             },
-            Msg::ReceivedAudio(data) => {
+            Msg::ReceivedAudio(_data) => {
                 // TODO: do stuff
             },
             Msg::RouteChanged(route) => {
@@ -152,13 +146,13 @@ impl Component for Model {
         true
     }
 
-    fn create(props: Self::Properties, link: ComponentLink<Self>) -> Self {
+    fn create(_props: Self::Properties, link: ComponentLink<Self>) -> Self {
         let mut route_service: RouteService<()> = RouteService::new();
         let route = route_service.get_route();
         let callback = link.callback(Msg::RouteChanged);
         route_service.register_callback(callback);
 
-        let mut fs = FetchService::new();
+        //let mut fs = FetchService::new();
 
         // Websocket for rig control
         // Two channels for the websocket connection
@@ -177,8 +171,7 @@ impl Component for Model {
                 },
                 WebSocketStatus::Opened => {
                     Msg::Connected
-                },
-				_ => Msg::None,
+                }
 			}
         });
         
@@ -246,9 +239,9 @@ impl Component for Model {
             route,
             link,
             console: ConsoleService::new(),
-            ft: None,
+            //ft: None,
             wss: ws,
-            ws: None,
+            //ws: None,
             receivers: vec![],
             radios: vec![],
             default_receiver: None,
