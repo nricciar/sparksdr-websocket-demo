@@ -2,19 +2,24 @@
 use anyhow::Error;
 use wasm_bindgen::prelude::*;
 use yew::prelude::*;
-use yew::services::ConsoleService;
+use yew::services::{ConsoleService,Task};
 use yew::{html, Component, ComponentLink, Html, ShouldRender};
 use yew_router::{route::Route, service::RouteService};
 use yew_router::{Switch};
 use yew::format::{Json};
+use yew::services::interval::{IntervalService, IntervalTask};
 //use yew::services::fetch::{FetchService, FetchTask, Request, Response};
 use yew::services::websocket::{WebSocketStatus};//, WebSocketTask};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use wasm_bindgen::JsCast;
 use uuid::Uuid;
 use std::str;
+use std::time::Duration;
+use chrono::prelude::*;
 
-use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode};
+use ham_rs::Call;
+use ham_rs::countries::CountryInfo;
+use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode,Spot};
 
 #[derive(Clone,Switch, Debug)]
 pub enum AppRoute {
@@ -33,7 +38,9 @@ pub struct Model {
     receivers: Vec<Receiver>,
     radios: Vec<Radio>,
     default_receiver: Option<Uuid>,
-    version: Option<Version>
+    version: Option<Version>,
+    poll: Option<Box<dyn Task>>,
+    spots: Vec<Spot>
 }
 
 enum WebsocketMsgType {
@@ -54,6 +61,7 @@ pub enum Msg {
     AddReceiver(Uuid),
     ReceivedAudio(js_sys::ArrayBuffer),
     None,
+    Tick
 }
 
 impl Component for Model {
@@ -72,6 +80,13 @@ impl Component for Model {
                     },
                     CommandResponse::Version(version) => {
                         self.version = Some(version);
+                    },
+                    CommandResponse::Spots { Spots: mut spots } => {
+                        self.spots.append(&mut spots);
+                        if self.spots.len() > 100 {
+                            let drain = self.spots.len() - 100;
+                            self.spots.drain(0..drain);
+                        }
                     }
                 }
             },
@@ -80,6 +95,8 @@ impl Component for Model {
             },
             Msg::AddReceiver(radio_id) => {
                 self.send_command(Command::AddReceiver { ID: radio_id });
+            },
+            Msg::Tick => {
                 self.send_command(Command::GetReceivers);
             },
             Msg::ModeChanged(receiver_id, mode) => {
@@ -129,6 +146,7 @@ impl Component for Model {
                 self.send_command(Command::GetReceivers);
                 self.send_command(Command::GetRadios);
                 self.send_command(Command::GetVersion);
+                self.send_command(Command::SubscribeToSpots{ Enable: true });
             },
             Msg::ReceivedAudio(_data) => {
                 // TODO: do stuff
@@ -151,6 +169,12 @@ impl Component for Model {
         let route = route_service.get_route();
         let callback = link.callback(Msg::RouteChanged);
         route_service.register_callback(callback);
+
+        let mut is = IntervalService::new();
+        let handle = is.spawn(
+            Duration::from_secs(10),
+            link.callback(|_| Msg::Tick),
+        );
 
         //let mut fs = FetchService::new();
 
@@ -245,7 +269,9 @@ impl Component for Model {
             receivers: vec![],
             radios: vec![],
             default_receiver: None,
-            version: None
+            version: None,
+            poll: Some(Box::new(handle)),
+            spots: vec![]
         }
     }
 
@@ -270,6 +296,25 @@ impl Component for Model {
 
                 <div style="clear:both"></div>
 
+                <div class="s">
+                    <table class="table">
+                        <tr>
+                            <th>{ "UTC" }</th>
+                            <th>{ "dB" }</th>
+                            <th>{ "DT" }</th>
+                            <th>{ "Freq" }</th>
+                            <th>{ "Mode" }</th>
+                            <th>{ "Dist" }</th>
+                            <th>{ "Message" }</th>
+                            <th></th>
+                        </tr>
+                        { for self.spots.iter().rev().map(|s| {
+                            self.spot(&s)
+                          })
+                        }
+                    </table>
+                </div>
+
                 {
                     match &self.version {
                         Some(version) => html! { <p class="version">{ format!("{} {} [Protocol Version: {}]", version.host, version.host_version, version.protocol_version) }</p> },
@@ -289,12 +334,52 @@ impl Model {
         self.wss.send_with_str(&j).unwrap();
     }
 
+    fn spot(&self, spot: &Spot) -> Html {
+        let call = Call::new(spot.call.to_string());
+        let country_icon =
+            match call.country() {
+                Ok(country) => html! { <i class=format!("flag-icon flag-icon-{}", country.code())></i> },
+                Err(_) => html! {},
+            };
+
+        html! {
+            <tr>
+                <td>{ spot.time.format("%H%M%S") }</td>
+                <td>{ spot.snr }</td>
+                <td>{ spot.dt }</td>
+                <td>{ format!("{} (+{})", spot.tuned_frequency, spot.frequency) }</td>
+                <th>{ spot.mode.mode() }</th>
+                <td>{ match spot.distance {
+                         Some(dist) => format!("{}", dist),
+                         None => format!(""),
+                      }
+                    }</td>
+                {
+                    match spot.msg.contains("CQ") {
+                        true => html! { <th>{ spot.msg.to_string() }</th> },
+                        false => html! { <td>{ spot.msg.to_string() }</td> }
+                    }
+                }
+                <td>{ country_icon }</td>
+            </tr>
+        }
+    }
+
     fn radio(&self, radio: &Radio) -> Html {
         let radio_id = radio.id;
         html! {
             <div class="radio-control">
                 { radio.name.to_string() }
-                <input type="button" value="Add Receiver" onclick=self.link.callback(move |_| Msg::AddReceiver(radio_id) ) />
+                <button class="button" disabled=true title="Power">
+                    <span class="icon is-small">
+                    <i class="fas fa-power-off fa-lg"></i>
+                    </span>
+                </button>
+                <button class="button" onclick=self.link.callback(move |_| Msg::AddReceiver(radio_id) ) title="Add Receiver">
+                    <span class="icon is-small">
+                    <i class="fas fa-plus fa-lg"></i>
+                    </span>
+                </button>
             </div>
         }
     }
