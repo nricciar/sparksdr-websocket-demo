@@ -6,15 +6,32 @@
         <title>Receivers</title>
         <script defer src="https://use.fontawesome.com/releases/v5.3.1/js/all.js"></script>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.0/css/bulma.min.css">
+        <link rel="stylesheet" href="css/flag-icon.min.css">
         <script type="module">
             import init from "./wasm.js"
             init()
         </script>
         <style type="text/css">
+        .flag-icon {
+            background-size: contain;
+            background-position: 50%;
+            background-repeat: no-repeat;
+            width: 16px;
+            height: 16px;
+        }
+        .s { 
+            padding:10px;
+            margin:10px;
+            max-height: 500px;
+            overflow: auto;
+        }
         .version {
             padding: 10px;
             margin: 10px;
             border-top: 1px solid #555;
+        }
+        .radio-control button {
+            margin-left: 5px;
         }
         .receiver-control, .radio-control {
             border:2px solid #555;
