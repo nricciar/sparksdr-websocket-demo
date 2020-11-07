@@ -6,20 +6,22 @@ use yew::services::{ConsoleService,Task};
 use yew::{html, Component, ComponentLink, Html, ShouldRender};
 use yew_router::{route::Route, service::RouteService};
 use yew_router::{Switch};
-use yew::format::{Json};
-use yew::services::interval::{IntervalService, IntervalTask};
-//use yew::services::fetch::{FetchService, FetchTask, Request, Response};
+use yew::format::{Json,Nothing};
+use yew::services::interval::{IntervalService};
+use yew::services::fetch::{FetchService, FetchTask, Request, Response};
+use yew::services::reader::{File, FileData, ReaderService, ReaderTask};
 use yew::services::websocket::{WebSocketStatus};//, WebSocketTask};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use wasm_bindgen::JsCast;
 use uuid::Uuid;
 use std::str;
 use std::time::Duration;
-use chrono::prelude::*;
+use adif;
 
 use ham_rs::Call;
-use ham_rs::countries::CountryInfo;
+use ham_rs::countries::{CountryInfo,Country};
 use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode,Spot};
+use ham_rs::log::LogEntry;
 
 #[derive(Clone,Switch, Debug)]
 pub enum AppRoute {
@@ -27,12 +29,27 @@ pub enum AppRoute {
     Index,
 }
 
+pub enum CallsignInfo {
+    Requested((Call, FetchTask)),
+    Found(Call),
+    NotFound(Call)
+}
+
+impl CallsignInfo {
+    fn call(&self) -> Call {
+        match self {
+            CallsignInfo::Requested((c, _)) => c.clone(),
+            CallsignInfo::Found(c) => c.clone(),
+            CallsignInfo::NotFound(c) => c.clone(),
+        }
+    }
+}
+
 pub struct Model {
     route_service: RouteService<()>,
     route: Route<()>,
     link: ComponentLink<Self>,
     console: ConsoleService,
-    //ft: Option<FetchTask>,
     //ws: Option<WebSocketTask>,
     wss: WebSocket,
     receivers: Vec<Receiver>,
@@ -40,13 +57,20 @@ pub struct Model {
     default_receiver: Option<Uuid>,
     version: Option<Version>,
     poll: Option<Box<dyn Task>>,
-    spots: Vec<Spot>
+    spots: Vec<Spot>,
+    show_receiver_list: bool,
+    import: Option<Vec<LogEntry>>,
+    reader: ReaderService,
+    tasks: Vec<ReaderTask>,
+    callsigns: Vec<CallsignInfo>,
 }
 
 enum WebsocketMsgType {
     BinaryMsg(js_sys::ArrayBuffer),
     TextMsg(String)
 }
+
+type Chunks = bool;
 
 pub enum Msg {
     RouteChanged(Route<()>),
@@ -60,8 +84,14 @@ pub enum Msg {
     SetDefaultReceiver(Uuid),
     AddReceiver(Uuid),
     ReceivedAudio(js_sys::ArrayBuffer),
+    ToggleReceiverList,
     None,
-    Tick
+    Tick,
+    Files(Vec<File>, Chunks),
+    Loaded(FileData),
+    CancelImport,
+    ConfirmImport,
+    CallsignInfoReady(Result<Call,Error>)
 }
 
 impl Component for Model {
@@ -81,14 +111,67 @@ impl Component for Model {
                     CommandResponse::Version(version) => {
                         self.version = Some(version);
                     },
-                    CommandResponse::Spots { Spots: mut spots } => {
-                        self.spots.append(&mut spots);
+                    CommandResponse::Spots { Spots: spots } => {
+                        for mut spot in spots {
+                            if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == spot.call.call() ) {
+                                match &self.callsigns[index] {
+                                    CallsignInfo::Found(call) => {
+                                        let call = call.clone();
+                                        spot.call = call;
+                                    },
+                                    _ => ()
+                                }
+                            } else {
+                                let call = spot.call.clone();
+                                let callback = self.link.callback(
+                                    move |response: Response<Json<Result<Call, Error>>>| {
+                                        let (meta, Json(data)) = response.into_parts();
+                                        if meta.status.is_success() {
+                                            Msg::CallsignInfoReady(data)
+                                        } else {
+                                            Msg::None // FIXME: Handle this error accordingly.
+                                        }
+                                    },
+                                );
+
+                                match call.prefix() {
+                                    Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
+                                        let mut fs = FetchService::new();
+                                        let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
+                                        let ft = fs.fetch(request, callback).unwrap();
+
+                                        let info = CallsignInfo::Requested((call, ft));
+                                        self.callsigns.push(info);
+                                    },
+                                    _ => ()
+                                }
+                            }
+
+                            self.spots.push(spot);
+                        }
                         if self.spots.len() > 100 {
                             let drain = self.spots.len() - 100;
                             self.spots.drain(0..drain);
                         }
                     }
                 }
+            },
+            Msg::CallsignInfoReady(Ok(call)) => {
+                let indexes : Vec<usize> = self.spots.iter().enumerate().filter(|&(_, s)| s.call.call() == call.call() ).map(|(i, _)| i).collect();
+                for index in indexes {
+                    self.console.log("updated record");
+                    self.spots[index].call = call.clone();
+                }
+
+                if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == call.call()) {
+                    self.callsigns[index] = CallsignInfo::Found(call)
+                } else {
+                    self.callsigns.push(CallsignInfo::Found(call))
+                }
+            },
+            Msg::CallsignInfoReady(Err(err)) => {
+                let msg = format!("callsign info error: {}", err);
+                self.console.log(&msg);
             },
             Msg::SetDefaultReceiver(receiver_id) => {
                 self.default_receiver = Some(receiver_id);
@@ -98,6 +181,9 @@ impl Component for Model {
             },
             Msg::Tick => {
                 self.send_command(Command::GetReceivers);
+            },
+            Msg::ToggleReceiverList => {
+                self.show_receiver_list = !self.show_receiver_list;
             },
             Msg::ModeChanged(receiver_id, mode) => {
                 if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
@@ -159,6 +245,41 @@ impl Component for Model {
                 self.route = route.into();
                 self.route_service.set_route(&self.route.route, ());
             },
+            Msg::CancelImport => {
+                self.import = None;
+            },
+            Msg::ConfirmImport => {
+            },
+            Msg::Loaded(data) => {
+                match adif::adif_parse("import", &mut data.content.as_slice()) {
+                    Ok(adif) => {
+                        let mut records = Vec::new();
+                        for record in adif.adif_records.as_slice() {
+                            match LogEntry::from_adif_record(&record) {
+                                Ok(entry) => {
+                                    records.push(entry);
+                                },
+                                Err(e) => {
+                                    self.console.log(&format!("failed to import record [{:?}]: {:?}", e, record));
+                                }
+                            }
+                        }
+                        self.import = Some(records);
+                    },
+                    Err(e) => {
+                        self.console.log(&format!("unable to load adif: {}", e));
+                    }
+                }
+            },
+            Msg::Files(files, _) => {
+                for file in files.into_iter() {
+                    let task = {
+                        let callback = self.link.callback(|data| Msg::Loaded(data));
+                        self.reader.read_file(file, callback).unwrap()
+                    };
+                    self.tasks.push(task);
+                }
+            },
             Msg::None => {}
         }
         true
@@ -175,8 +296,6 @@ impl Component for Model {
             Duration::from_secs(10),
             link.callback(|_| Msg::Tick),
         );
-
-        //let mut fs = FetchService::new();
 
         // Websocket for rig control
         // Two channels for the websocket connection
@@ -271,7 +390,12 @@ impl Component for Model {
             default_receiver: None,
             version: None,
             poll: Some(Box::new(handle)),
-            spots: vec![]
+            spots: vec![],
+            show_receiver_list: false,
+            import: None,
+            reader: ReaderService::new(),
+            tasks: Vec::new(),
+            callsigns: vec![]
         }
     }
 
@@ -287,33 +411,28 @@ impl Component for Model {
                   })
                 }
 
+                <div class="control-bar">
+                    { self.toggle_receivers() }
+                </div>
+
                 <div style="clear:both"></div>
 
-                { for self.receivers.iter().map(|r| {
-                    self.receiver(&r)
-                  })
+                {
+                    match self.show_receiver_list {
+                        true => {
+                            html! {
+                                {
+                                    for self.receivers.iter().map(|r| {
+                                        self.receiver(&r)
+                                    })
+                                }
+                            }
+                        },
+                        false => html! {}
+                    }
                 }
 
-                <div style="clear:both"></div>
-
-                <div class="s">
-                    <table class="table">
-                        <tr>
-                            <th>{ "UTC" }</th>
-                            <th>{ "dB" }</th>
-                            <th>{ "DT" }</th>
-                            <th>{ "Freq" }</th>
-                            <th>{ "Mode" }</th>
-                            <th>{ "Dist" }</th>
-                            <th>{ "Message" }</th>
-                            <th></th>
-                        </tr>
-                        { for self.spots.iter().rev().map(|s| {
-                            self.spot(&s)
-                          })
-                        }
-                    </table>
-                </div>
+                { self.spots_view() }
 
                 {
                     match &self.version {
@@ -327,6 +446,87 @@ impl Component for Model {
 }
 
 impl Model {
+    fn toggle_receivers(&self) -> Html {
+        let cls = if self.show_receiver_list == true {
+            "fa-chevron-up"
+        } else {
+            "fa-chevron-down"
+        };
+        html! {
+            <button class="button is-text" onclick=self.link.callback(move |_| Msg::ToggleReceiverList)>
+                <span>{ format!("{} Receivers", self.receivers.len()) }</span>
+                <span class="icon is-small">
+                    <i class=("fas", cls)></i>
+                </span>
+            </button>
+        }
+    }
+    fn spots_view(&self) -> Html {
+        html! {
+            <>
+                <div style="clear:both"></div>
+
+                <div class="s">
+                    <table class="table">
+                        <tr>
+                            <th>{ "UTC" }</th>
+                            <th>{ "dB" }</th>
+                            <th>{ "DT" }</th>
+                            <th>{ "Freq" }</th>
+                            <th>{ "Mode" }</th>
+                            <th>{ "Dist" }</th>
+                            <th>{ "Message" }</th>
+                            <th></th>
+                            <th></th>
+                        </tr>
+                        { for self.spots.iter().rev().map(|s| {
+                            self.spot(&s)
+                          })
+                        }
+                    </table>
+                </div>
+
+                { self.import_adif_form() }
+            </>
+        }
+    }
+
+    fn import_adif_form(&self) -> Html {
+        html! {
+                <div class="import">
+                    {
+                        match &self.import {
+                            None => html! {
+                                <>
+                    <p>{"Import log file (adif format) to cross check spots."}</p>
+                    <input type="file" multiple=true onchange=self.link.callback(move |value| {
+                            let mut result = Vec::new();
+                            if let ChangeData::Files(files) = value {
+                                let files = js_sys::try_iter(&files)
+                                    .unwrap()
+                                    .unwrap()
+                                    .into_iter()
+                                    .map(|v| File::from(v.unwrap()));
+                                result.extend(files);
+                            }
+                            Msg::Files(result, false)
+                        })/>
+                                </>
+                            },
+                            Some(import) => html! {
+                                <>
+                                    <p>{ format!("Found {} records", import.len()) }</p>
+                                    <p>
+                                        <input type="button" class="button" value="Cancel Import" onclick=self.link.callback(|_| Msg::CancelImport) />
+                                    </p>
+                                </>
+                            },
+                        }
+                    }
+                </div>
+        }
+    }
+
     fn send_command(&mut self, cmd: Command) {
         let j = serde_json::to_string(&cmd).unwrap();
         let msg = format!("sent: {}", j);
@@ -336,10 +536,36 @@ impl Model {
 
     fn spot(&self, spot: &Spot) -> Html {
         let call = Call::new(spot.call.to_string());
-        let country_icon =
+        let (country_icon, state_class) =
             match call.country() {
-                Ok(country) => html! { <i class=format!("flag-icon flag-icon-{}", country.code())></i> },
-                Err(_) => html! {},
+                Ok(country) => {
+                    let (new_country, new_state) =
+                        match &self.import {
+                            Some(import) => {
+                                let new_country =
+                                    if let Some(_index) = import.iter().position(|i| i.call.country() == Ok(country.clone())) {
+                                        ""
+                                    } else {
+                                        "new-country"
+                                    };
+                                let new_state =
+                                    match call.state() {
+                                        Some(state) => {
+                                            if let Some(_index) = import.iter().position(|i| i.call.state() == Some(state.to_string())) {
+                                                ""
+                                            } else {
+                                                "new-state"
+                                            }
+                                        },
+                                        _ => "",
+                                    };
+                                (new_country, new_state)
+                            },
+                            None => ("", ""),
+                        };
+                    (html! { <><i class=format!("flag-icon flag-icon-{}", country.code())></i> <span class=new_country>{ country.name() }</span></> }, new_state)
+                },
+                Err(_) => (html! {}, ""),
             };
 
         html! {
@@ -361,6 +587,14 @@ impl Model {
                     }
                 }
                 <td>{ country_icon }</td>
+                <td>{ match spot.call.state() {
+                          Some(state) => format!("{}", state),
+                          None => format!("")
+                      } }</td>
+                <td class=state_class>{ match spot.call.op() {
+                          Some(op) => format!("{}", op),
+                          None => format!("")
+                      } }</td>
             </tr>
         }
     }
@@ -369,7 +603,9 @@ impl Model {
         let radio_id = radio.id;
         html! {
             <div class="radio-control">
-                { radio.name.to_string() }
+                <button class="button is-text" disabled=true>
+                    { radio.name.to_string() }
+                </button>
                 <button class="button" disabled=true title="Power">
                     <span class="icon is-small">
                     <i class="fas fa-power-off fa-lg"></i>

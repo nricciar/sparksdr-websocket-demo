@@ -252,7 +252,7 @@ dependencies = [
 [[package]]
 name = "ham-rs"
 version = "0.1.0"
-source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#80aa1f7775dd05c74ceb99c79393d96ab11a02ff"
+source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#472a63e1b1a098c3fd6c61b323ecf28dc7e597e0"
 dependencies = [
  "adif 0.1.0 (git+https://github.com/davepacheco/rust-adif.git)",
  "chrono 0.4.19 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -430,6 +430,7 @@ dependencies = [
 name = "radio"
 version = "0.1.0"
 dependencies = [
+ "adif 0.1.0 (git+https://github.com/davepacheco/rust-adif.git)",
  "anyhow 1.0.34 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "ham-rs 0.1.0 (git+https://github.com/nricciar/ham-rs?branch=pre-release)",

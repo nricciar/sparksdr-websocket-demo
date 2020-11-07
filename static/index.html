@@ -12,12 +12,20 @@
             init()
         </script>
         <style type="text/css">
+        .new-country,.new-state {
+            color: green;
+        }
+        .import {
+            padding:10px;
+            margin:10px;
+        }
         .flag-icon {
             background-size: contain;
             background-position: 50%;
             background-repeat: no-repeat;
             width: 16px;
             height: 16px;
+            margin-right:5px;
         }
         .s { 
             padding:10px;
@@ -33,11 +41,15 @@
         .radio-control button {
             margin-left: 5px;
         }
-        .receiver-control, .radio-control {
+        .receiver-control, .radio-control, .control-bar {
             border:2px solid #555;
             padding:10px;
             margin:10px;
             float:left;
+            border-radius:3px;
+        }
+        .control-bar {
+            border:2px solid transparent !important
         }
         .receiver-control {
             width: 15em
