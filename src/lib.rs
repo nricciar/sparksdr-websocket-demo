@@ -23,12 +23,15 @@ use ham_rs::countries::{CountryInfo,Country};
 use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode,Spot};
 use ham_rs::log::LogEntry;
 
+// Currently this is unused as there is only one route: /
 #[derive(Clone,Switch, Debug)]
 pub enum AppRoute {
     #[to = "/"]
     Index,
 }
 
+// Used with the local callsign cache for our requests
+// for callsign info.
 pub enum CallsignInfo {
     Requested((Call, FetchTask)),
     Found(Call),
@@ -46,25 +49,41 @@ impl CallsignInfo {
 }
 
 pub struct Model {
+    // Currently unused
     route_service: RouteService<()>,
     route: Route<()>,
+    // Callbacks
     link: ComponentLink<Self>,
+    // Console logging
     console: ConsoleService,
-    //ws: Option<WebSocketTask>,
+    // SparkSDR connection
     wss: WebSocket,
+    // List of receivers from getReceivers command
     receivers: Vec<Receiver>,
+    // List of radios from the getRadios command
     radios: Vec<Radio>,
+    // Currently selected receiver
     default_receiver: Option<Uuid>,
+    // Version response from the getVersion command
     version: Option<Version>,
+    // TODO: temporary to keep local ui updated
     poll: Option<Box<dyn Task>>,
+    // Spots from enabling SubscribeToSpots
     spots: Vec<Spot>,
+    // Show/Hide receiver list
     show_receiver_list: bool,
+    // Imported log file (ADIF format) for spot cross checking
     import: Option<Vec<LogEntry>>,
+    // Services for file importing (log file)
     reader: ReaderService,
     tasks: Vec<ReaderTask>,
+    // Local callsign cache
     callsigns: Vec<CallsignInfo>,
 }
 
+// Currently only TextMsg is implemented and this is the
+// commands to and responses from SparkSDR.
+// BinaryMsg would be for future support for audio in/out
 enum WebsocketMsgType {
     BinaryMsg(js_sys::ArrayBuffer),
     TextMsg(String)
@@ -73,24 +92,37 @@ enum WebsocketMsgType {
 type Chunks = bool;
 
 pub enum Msg {
+    // not implemented
     RouteChanged(Route<()>),
     ChangeRoute(AppRoute),
+    // websocket connection
     Disconnected,
     Connected,
+    // Command responses from SparkSDR (e.g. getReceiversResponse, getVersionResponse)
     ReceivedText(Result<CommandResponse, Error>),
+    // UI request frequency change up/down on digit X for receiver Uuid
     FrequencyUp(Uuid, i32), // digit 0 - 8 
     FrequencyDown(Uuid, i32), // digit 0 - 8
+    // UI request to change receiver Uuid mode
     ModeChanged(Uuid, Mode),
+    // UI request to set the default receiver to Uuid
     SetDefaultReceiver(Uuid),
+    // UI request to add a receiver to radio Uuid
     AddReceiver(Uuid),
+    // Not implemented (future support for audio data)
     ReceivedAudio(js_sys::ArrayBuffer),
+    // UI toggle show/hide receiver list
     ToggleReceiverList,
+    // None
     None,
+    // TODO: poll tick (temporary)
     Tick,
+    // File import (log file)
     Files(Vec<File>, Chunks),
     Loaded(FileData),
     CancelImport,
     ConfirmImport,
+    // Response to our callsign info request
     CallsignInfoReady(Result<Call,Error>)
 }
 
@@ -102,20 +134,26 @@ impl Component for Model {
         match msg {
             Msg::ReceivedText(Ok(msg)) => {
                 match msg {
+                    // getReceiversResponse: update our receiver list
                     CommandResponse::Receivers { Receivers: receivers } => {
                         self.receivers = receivers;
                     },
+                    // getRadioResponse: update our radio list
                     CommandResponse::Radios { Radios: radios } => {
                         self.radios = radios;
                     },
+                    // getVersionResponse: update our version info
                     CommandResponse::Version(version) => {
                         self.version = Some(version);
                     },
+                    // spotResponse: new incoming spots
                     CommandResponse::Spots { Spots: spots } => {
                         for mut spot in spots {
+                            // check callsign cache to see if we have info already
                             if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == spot.call.call() ) {
                                 match &self.callsigns[index] {
                                     CallsignInfo::Found(call) => {
+                                        // update spot call with additional callsign info from cache
                                         let call = call.clone();
                                         spot.call = call;
                                     },
@@ -135,6 +173,9 @@ impl Component for Model {
                                 );
 
                                 match call.prefix() {
+                                    // If callsign is United States make a request for additional callsign
+                                    // info from server.  Response will be handled by the Msg::CallsignInfoReady
+                                    // message handler
                                     Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
                                         let mut fs = FetchService::new();
                                         let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
@@ -149,6 +190,8 @@ impl Component for Model {
 
                             self.spots.push(spot);
                         }
+
+                        // keep only the 100 most recent spots
                         if self.spots.len() > 100 {
                             let drain = self.spots.len() - 100;
                             self.spots.drain(0..drain);
@@ -157,12 +200,15 @@ impl Component for Model {
                 }
             },
             Msg::CallsignInfoReady(Ok(call)) => {
+                // Find every spot record for callsign
                 let indexes : Vec<usize> = self.spots.iter().enumerate().filter(|&(_, s)| s.call.call() == call.call() ).map(|(i, _)| i).collect();
                 for index in indexes {
-                    self.console.log("updated record");
+                    // update spot record with our updated callsign info
                     self.spots[index].call = call.clone();
                 }
 
+                // Mark callsign as found in local callsign cache for
+                // future lookups
                 if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == call.call()) {
                     self.callsigns[index] = CallsignInfo::Found(call)
                 } else {
@@ -180,6 +226,9 @@ impl Component for Model {
                 self.send_command(Command::AddReceiver { ID: radio_id });
             },
             Msg::Tick => {
+                // Not all SparkSDR commands currently provide a response.
+                // To fake it we poll getReceivers every 10 seconds to keep ui
+                // in sync with backend.
                 self.send_command(Command::GetReceivers);
             },
             Msg::ToggleReceiverList => {
@@ -229,9 +278,11 @@ impl Component for Model {
                 self.console.log("Disconnected");
             },
             Msg::Connected => {
+                // When we first connect to SparkSDR gather some basic information
                 self.send_command(Command::GetReceivers);
                 self.send_command(Command::GetRadios);
                 self.send_command(Command::GetVersion);
+                // Also subscribe to spots
                 self.send_command(Command::SubscribeToSpots{ Enable: true });
             },
             Msg::ReceivedAudio(_data) => {
@@ -291,6 +342,7 @@ impl Component for Model {
         let callback = link.callback(Msg::RouteChanged);
         route_service.register_callback(callback);
 
+        // TODO: temporary fix to keep ui in sync with backend
         let mut is = IntervalService::new();
         let handle = is.spawn(
             Duration::from_secs(10),
@@ -382,9 +434,7 @@ impl Component for Model {
             route,
             link,
             console: ConsoleService::new(),
-            //ft: None,
             wss: ws,
-            //ws: None,
             receivers: vec![],
             radios: vec![],
             default_receiver: None,
@@ -476,6 +526,7 @@ impl Model {
                             <th>{ "Mode" }</th>
                             <th>{ "Dist" }</th>
                             <th>{ "Message" }</th>
+                            <th></th>
                             <th></th>
                             <th></th>
                         </tr>
