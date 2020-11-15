@@ -17,6 +17,10 @@ use uuid::Uuid;
 use std::str;
 use std::time::Duration;
 use adif;
+use web_sys::{AudioContext, AudioBuffer, AudioBufferSourceNode, OfflineAudioContext};
+use wasm_bindgen_futures::{spawn_local, JsFuture};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use ham_rs::Call;
 use ham_rs::countries::{CountryInfo,Country};
@@ -79,6 +83,10 @@ pub struct Model {
     tasks: Vec<ReaderTask>,
     // Local callsign cache
     callsigns: Vec<CallsignInfo>,
+    // audio playback
+    audio_ctx: AudioContext,
+    source: AudioBufferSourceNode,
+    buffer: Rc<RefCell<Option<AudioBuffer>>>,
 }
 
 // Currently only TextMsg is implemented and this is the
@@ -285,8 +293,45 @@ impl Component for Model {
                 // Also subscribe to spots
                 self.send_command(Command::SubscribeToSpots{ Enable: true });
             },
-            Msg::ReceivedAudio(_data) => {
-                // TODO: do stuff
+            Msg::ReceivedAudio(data) => {
+                let moved_buffer = self.buffer.clone();
+                let moved_context = self.audio_ctx.clone();
+                let moved_source = self.source.clone();
+                spawn_local(async move {
+                    *moved_buffer.borrow_mut() = Some(async move {
+                        //JsFuture::from(decode_audio(&data))
+                        //    .await?
+                        //    .dyn_into::<AudioBuffer>()
+                        let buffer = JsFuture::from(moved_context.decode_audio_data(&data)?)
+                            .await?
+                            .dyn_into::<AudioBuffer>();
+
+                        let moved_buffer = buffer.clone();
+                        match moved_buffer {
+                            Ok(moved_buffer) => {
+                                // TODO: need some kind of buffer here to append the new
+                                // audio data to instead of replacing it
+                                ConsoleService::new().log("decoded audio. adding to buffer.");
+                                //let source = moved_context.create_buffer_source().unwrap();
+                                moved_source.set_buffer(Some(&moved_buffer));
+
+                                /*let destination = moved_context.destination();
+                                let gain = moved_context.create_gain().unwrap();
+                                gain.gain().set_value(1.0);
+                                gain.connect_with_audio_node(&destination).unwrap();
+                                source.connect_with_audio_node(&gain).unwrap();
+
+                                source.set_loop(false);
+                                source.start().unwrap();*/
+                            },
+                            Err(err) => {
+                                ConsoleService::new().log(&format!("audo buffer error: {:?}", err));
+                            }
+                        }
+
+                        buffer
+                    }.await.unwrap());
+                });
             },
             Msg::RouteChanged(route) => {
                 self.route = route;
@@ -421,13 +466,18 @@ impl Component for Model {
         onmessage_callback.forget();
 
         // audio channel
+        let buffer = Rc::new(RefCell::new(None));
         let audio_ctx = web_sys::AudioContext::new().unwrap();
+        let source = audio_ctx.create_buffer_source().unwrap();
+
+        let destination = audio_ctx.destination();
         let gain = audio_ctx.create_gain().unwrap();
         gain.gain().set_value(1.0);
-        gain.connect_with_audio_node(&audio_ctx.destination()).unwrap();
-        let source = audio_ctx.create_buffer_source().unwrap();
+        gain.connect_with_audio_node(&destination).unwrap();
+        source.connect_with_audio_node(&gain).unwrap();
+
+        source.set_loop(false);
         source.start().unwrap();
-        source.set_loop(true);
 
         Model {
             route_service,
@@ -445,7 +495,10 @@ impl Component for Model {
             import: None,
             reader: ReaderService::new(),
             tasks: Vec::new(),
-            callsigns: vec![]
+            callsigns: vec![],
+            audio_ctx: audio_ctx,
+            source: source,
+            buffer: buffer,
         }
     }
 
@@ -493,6 +546,21 @@ impl Component for Model {
             </>
         }
     }
+}
+
+#[wasm_bindgen]
+pub fn decode_audio(buffer: &js_sys::ArrayBuffer) -> js_sys::Promise {
+    // See: https://github.com/magenta/magenta-js/blob/master/music/src/core/audio_utils.ts#L78
+    let context = match OfflineAudioContext::new_with_number_of_channels_and_length_and_sample_rate(
+        1, 16000, 16000.0
+    ) {
+        Ok(c) => c,
+        Err(e) => return js_sys::Promise::reject(&e)
+    };
+    return match context.decode_audio_data(buffer) {
+        Ok(p) => p,
+        Err(e) => return js_sys::Promise::reject(&e)
+    };
 }
 
 impl Model {

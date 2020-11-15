@@ -22,6 +22,7 @@ serde_json = "1"
 serde_derive = "1"
 chrono = { version = "0.4.11", features = ["serde","wasmbind","js-sys"] }
 adif = { git = "https://github.com/davepacheco/rust-adif.git" }
+wasm-bindgen-futures = "0.4.18"
 
 [dependencies.web-sys]
 version = "0.3.4"
@@ -36,4 +37,5 @@ features = [
   'AudioBuffer',
   'AudioBufferSourceNode',
   'MessageEvent',
+  'OfflineAudioContext'
 ]
