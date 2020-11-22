@@ -1,6 +1,7 @@
 #![recursion_limit = "2048"]
 use wasm_bindgen::prelude::*;
-use yew::{html, Component, ComponentLink, Html, ShouldRender};
+use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
+use yew::{events::KeyboardEvent, Classes};
 
 use ham_rs::rig::{Command,CommandResponse};
 
@@ -83,7 +84,15 @@ impl Component for Model {
             },
             Msg::FrequencyUp(receiver_id, digit) => {
                 self.frequency_up(receiver_id, digit);
-            }
+            },
+            Msg::Connect => {
+                let addr = self.ws_location.to_string();
+                self.console.log(&format!("Connecting to {}", addr));
+                self.connect(&addr);
+            },
+            Msg::UpdateWebsocketAddress(address) => {
+                self.ws_location = address;
+            },
             Msg::Disconnected => {
                 self.disconnect();
                 self.console.log("Disconnected");
@@ -138,22 +147,42 @@ impl Component for Model {
     }
 
     fn view(&self) -> Html {
-        html! {
-            <>
-                { self.radio_list() }
+        if self.is_connected() {
+            html! {
+                <>
+                    { self.radio_list() }
 
-                <div class="control-bar">
-                    { self.toggle_receivers() }
+                    <div class="control-bar">
+                        { self.toggle_receivers() }
+                    </div>
+
+                    <div style="clear:both"></div>
+
+                    { self.receiver_list() }
+
+                    { self.spots_view() }
+
+                    { self.version_html() }
+                </>
+            }
+        } else {
+            html! {
+                <div class="container">
+                    <h1 class="title">{ "Disconnected" }</h1>
+                    <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
+                    <div class="field is-grouped" style="width:30em">
+                    <input class="input"
+                        value=&self.ws_location
+                        oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
+                        onkeypress=self.link.callback(|e: KeyboardEvent| {
+                            if e.key() == "Enter" { Msg::Connect } else { Msg::None }
+                        }) />
+                    <button class="button is-link" onclick=self.link.callback(move |_| Msg::Connect )>
+                        { "Connect" }
+                    </button>
+                    </div>
                 </div>
-
-                <div style="clear:both"></div>
-
-                { self.receiver_list() }
-
-                { self.spots_view() }
-
-                { self.version_html() }
-            </>
+            }
         }
     }
 }

@@ -36,6 +36,7 @@ pub struct Model {
     pub link: ComponentLink<Self>,
 
     // SparkSDR connection
+    pub ws_location: String,
     wss: Option<WebSocket>,
     // List of receivers from getReceivers command
     receivers: Vec<Receiver>,
@@ -104,8 +105,10 @@ pub enum Msg {
     RouteChanged(Route<()>),
     ChangeRoute(AppRoute),
     // websocket connection
+    Connect,
     Disconnected,
     Connected,
+    UpdateWebsocketAddress(String),
     // Command responses from SparkSDR (e.g. getReceiversResponse, getVersionResponse)
     CommandResponse(Result<CommandResponse, Error>),
     // UI request frequency change up/down on digit X for receiver Uuid
@@ -135,7 +138,7 @@ pub enum Msg {
     CancelImport,
     ConfirmImport,
     // Response to our callsign info request
-    CallsignInfoReady(Result<Call,Error>)
+    CallsignInfoReady(Result<Call,Error>),
 }
 
 impl Model {
@@ -167,6 +170,7 @@ impl Model {
             route,
             link,
             console: ConsoleService::new(),
+            ws_location: "ws://localhost:4649/Spark".to_string(),
             wss: None,
             receivers: vec![],
             radios: vec![],
