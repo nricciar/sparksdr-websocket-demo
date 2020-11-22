@@ -1,7 +1,7 @@
 #![recursion_limit = "2048"]
 use wasm_bindgen::prelude::*;
 use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
-use yew::{events::KeyboardEvent, Classes};
+use yew::{events::KeyboardEvent};
 
 use ham_rs::rig::{Command,CommandResponse};
 
@@ -20,7 +20,7 @@ impl Component for Model {
                     CommandResponse::Receivers { Receivers: receivers } => {
                         self.set_receivers(receivers);
                     },
-                    // getRadioResponse: update our radio list
+                    //  update our radio list
                     CommandResponse::Radios { Radios: radios } => {
                         self.set_radios(radios);
                     },
@@ -31,25 +31,26 @@ impl Component for Model {
                     // spotResponse: new incoming spots
                     CommandResponse::Spots { Spots: spots } => {
                         for spot in spots {
-                            self.add_spot(spot);
+                            if (self.cq_only && spot.msg.contains("CQ")) || !self.cq_only {
+                                self.add_spot(spot);
+                            }
                         }
                         self.trim_spots(100);
                     },
+                    // ReceiverResponse: receiver updates (mode/frequency)
                     CommandResponse::ReceiverResponse{ ID: receiver_id, Frequency: frequency, Mode: mode } => {
                         self.update_receiver(receiver_id, mode, frequency);
                     }
                 }
             },
             Msg::CommandResponse(Err(err)) => {
-                let err = format!("error: {}", err);
-                self.console.log(&err);
+                self.console.log(&format!("command response error: {}", err));
             },
             Msg::CallsignInfoReady(Ok(call)) => {
                 self.cache_callsign_info(call);
             },
             Msg::CallsignInfoReady(Err(err)) => {
-                let msg = format!("callsign info error: {}", err);
-                self.console.log(&msg);
+                self.console.log(&format!("callsign info error: {}", err));
             },
             Msg::SetDefaultReceiver(receiver_id) => {
                 self.set_default_receiver(Some(receiver_id));
@@ -60,8 +61,7 @@ impl Component for Model {
             Msg::RemoveReceiver(receiver_id) => {
                 self.send_command(Command::RemoveReceiver{ ID: receiver_id });
             },
-            Msg::Tick => {
-                self.send_command(Command::GetReceivers);
+            Msg::Tick => { // self.enable_ticks(seconds)
             },
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
@@ -129,6 +129,9 @@ impl Component for Model {
                     self.read_file(file);
                 }
             },
+            Msg::ToggleCQSpotFilter => {
+                self.cq_only = !self.cq_only;
+            }
             Msg::None => {}
         }
         true
@@ -147,42 +150,50 @@ impl Component for Model {
     }
 
     fn view(&self) -> Html {
-        if self.is_connected() {
-            html! {
-                <>
-                    { self.radio_list() }
+        html! {
+            <>
+            {
+                if self.is_connected() {
+                    html! {
+                        <>
+                            { self.radio_list_control() }
 
-                    <div class="control-bar">
-                        { self.toggle_receivers() }
-                    </div>
+                            <div class="control-bar">
+                                { self.toggle_receivers_button() }
+                            </div>
 
-                    <div style="clear:both"></div>
+                            <div style="clear:both"></div>
 
-                    { self.receiver_list() }
+                            { self.receiver_list_control() }
 
-                    { self.spots_view() }
-
-                    { self.version_html() }
-                </>
+                            { self.spots_view() }
+                        </>
+                    }
+                } else {
+                    html! {
+                        <div class="container">
+                            <h1 class="title">{ "Disconnected" }</h1>
+                            <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
+                            <div class="field is-grouped" style="width:30em">
+                            <input class="input"
+                                value=&self.ws_location
+                                oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
+                                onkeypress=self.link.callback(|e: KeyboardEvent| {
+                                    if e.key() == "Enter" { Msg::Connect } else { Msg::None }
+                                }) />
+                            <button class="button is-link" onclick=self.link.callback(move |_| Msg::Connect )>
+                                { "Connect" }
+                            </button>
+                            </div>
+                        </div>
+                    }
+                }
             }
-        } else {
-            html! {
-                <div class="container">
-                    <h1 class="title">{ "Disconnected" }</h1>
-                    <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
-                    <div class="field is-grouped" style="width:30em">
-                    <input class="input"
-                        value=&self.ws_location
-                        oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
-                        onkeypress=self.link.callback(|e: KeyboardEvent| {
-                            if e.key() == "Enter" { Msg::Connect } else { Msg::None }
-                        }) />
-                    <button class="button is-link" onclick=self.link.callback(move |_| Msg::Connect )>
-                        { "Connect" }
-                    </button>
-                    </div>
-                </div>
-            }
+            <div class="copy">
+                { self.version_html() }
+                <p><a href="https://github.com/nricciar/sparksdr-websocket-demo" target="_blank">{ "sparksdr-websocket-demo @ github" }</a></p>
+            </div>
+            </>
         }
     }
 }

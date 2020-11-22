@@ -50,6 +50,8 @@ pub struct Model {
     poll: Option<Box<dyn Task>>,
     // Spots from enabling SubscribeToSpots
     spots: Vec<Spot>,
+    pub cq_only: bool,
+
     // Show/Hide receiver list
     show_receiver_list: bool,
     // Imported log file (ADIF format) for spot cross checking
@@ -139,6 +141,7 @@ pub enum Msg {
     ConfirmImport,
     // Response to our callsign info request
     CallsignInfoReady(Result<Call,Error>),
+    ToggleCQSpotFilter,
 }
 
 impl Model {
@@ -178,6 +181,7 @@ impl Model {
             version: None,
             poll: None,
             spots: vec![],
+            cq_only: false,
             show_receiver_list: false,
             import: None,
             reader: ReaderService::new(),
@@ -189,24 +193,83 @@ impl Model {
         }
     }
 
+    // CommandResponse: getReceiversResponse
     pub fn set_receivers(&mut self, receivers: Vec<Receiver>) {
         self.receivers = receivers;
     }
 
+    // CommandResponse: getRadioResponse
     pub fn set_radios(&mut self, radios: Vec<Radio>) {
         self.radios = radios;
     }
 
+    // CommandResponse: getVersionResponse
     pub fn set_version(&mut self, version: Version) {
         self.version = Some(version);
     }
 
-    pub fn set_default_receiver(&mut self, receiver: Option<Uuid>) {
-        self.default_receiver = receiver;
+    // CommandResponse: ReceiverResponse
+    pub fn update_receiver(&mut self, receiver_id: Uuid, mode: Mode, frequency: f32) {
+        if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
+            self.receivers[index].frequency = frequency;
+            self.receivers[index].mode = mode;
+        } else {
+            self.console.log(&format!("Attempted to update a receiver that does not exist: {}", receiver_id));
+        }
     }
 
-    pub fn toggle_receiver_list(&mut self) {
-        self.show_receiver_list = !self.show_receiver_list;
+    // CommandResponse: spotResponse
+    pub fn add_spot(&mut self, spot: Spot) {
+        // FIXME: temp fix
+        let mut spot = spot;
+
+        if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == spot.call.call() ) {
+            match &self.callsigns[index] {
+                CallsignInfo::Found(call) => {
+                    // update spot call with additional callsign info from cache
+                    let call = call.clone();
+                    spot.call = call;
+                },
+                _ => ()
+            }
+        } else {
+            let call = spot.call.clone();
+            let callback = self.link.callback(
+                move |response: Response<Json<Result<Call, Error>>>| {
+                    let (meta, Json(data)) = response.into_parts();
+                    if meta.status.is_success() {
+                        Msg::CallsignInfoReady(data)
+                    } else {
+                        Msg::None // FIXME: Handle this error accordingly.
+                    }
+                },
+            );
+
+            match call.prefix() {
+                // If callsign is United States make a request for additional callsign
+                // info from server.  Response will be handled by the Msg::CallsignInfoReady
+                // message handler
+                Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
+                    let mut fs = FetchService::new();
+                    let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
+                    let ft = fs.fetch(request, callback).unwrap();
+
+                    let info = CallsignInfo::Requested((call, ft));
+                    self.callsigns.push(info);
+                },
+                _ => ()
+            }
+        }
+
+        self.spots.push(spot);
+    }
+
+    // helper function to remove all except `limit` recent spots
+    pub fn trim_spots(&mut self, limit: usize) {
+        if self.spots.len() > limit {
+            let drain = self.spots.len() - limit;
+            self.spots.drain(0..drain);
+        }
     }
 
     pub fn change_receiver_mode(&mut self, receiver_id: Uuid, mode: Mode) {
@@ -339,6 +402,12 @@ impl Model {
 
     pub fn disconnect(&mut self) {
         self.wss = None;
+        self.receivers = Vec::new();
+        self.radios = Vec::new();
+        self.callsigns = Vec::new();
+        self.version = None;
+        self.default_receiver = None;
+        self.spots = Vec::new();
     }
 
     pub fn is_connected(&self) -> bool {
@@ -434,6 +503,14 @@ impl Model {
         });*/
     }
 
+    pub fn set_default_receiver(&mut self, receiver: Option<Uuid>) {
+        self.default_receiver = receiver;
+    }
+
+    pub fn toggle_receiver_list(&mut self) {
+        self.show_receiver_list = !self.show_receiver_list;
+    }
+
     pub fn enable_ticks(&mut self, interval: u64) {
         let mut is = IntervalService::new();
         let handle = is.spawn(
@@ -441,58 +518,6 @@ impl Model {
             self.link.callback(|_| Msg::Tick),
         );
         self.poll = Some(Box::new(handle))
-    }
-
-    pub fn trim_spots(&mut self, limit: usize) {
-        if self.spots.len() > limit {
-            let drain = self.spots.len() - limit;
-            self.spots.drain(0..drain);
-        }
-    }
-
-    pub fn add_spot(&mut self, spot: Spot) {
-        // FIXME: temp fix
-        let mut spot = spot;
-
-        if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == spot.call.call() ) {
-            match &self.callsigns[index] {
-                CallsignInfo::Found(call) => {
-                    // update spot call with additional callsign info from cache
-                    let call = call.clone();
-                    spot.call = call;
-                },
-                _ => ()
-            }
-        } else {
-            let call = spot.call.clone();
-            let callback = self.link.callback(
-                move |response: Response<Json<Result<Call, Error>>>| {
-                    let (meta, Json(data)) = response.into_parts();
-                    if meta.status.is_success() {
-                        Msg::CallsignInfoReady(data)
-                    } else {
-                        Msg::None // FIXME: Handle this error accordingly.
-                    }
-                },
-            );
-
-            match call.prefix() {
-                // If callsign is United States make a request for additional callsign
-                // info from server.  Response will be handled by the Msg::CallsignInfoReady
-                // message handler
-                Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
-                    let mut fs = FetchService::new();
-                    let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
-                    let ft = fs.fetch(request, callback).unwrap();
-
-                    let info = CallsignInfo::Requested((call, ft));
-                    self.callsigns.push(info);
-                },
-                _ => ()
-            }
-        }
-
-        self.spots.push(spot);
     }
 
     pub fn read_file(&mut self, file: File) {
@@ -529,15 +554,6 @@ impl Model {
         self.import = None;
     }
 
-    pub fn update_receiver(&mut self, receiver_id: Uuid, mode: Mode, frequency: f32) {
-        if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
-            self.receivers[index].frequency = frequency;
-            self.receivers[index].mode = mode;
-        } else {
-            self.console.log(&format!("Attempted to update a receiver that does not exist: {}", receiver_id));
-        }
-    }
-
     pub fn get_radio_power_state(&self, radio_id: Uuid) -> Option<bool> {
         if let Some(index) = self.radios.iter().position(|i| i.id == radio_id) {
             Some(self.radios[index].running)
@@ -546,7 +562,7 @@ impl Model {
         }
     }
 
-    pub fn radio_list(&self) -> Html {
+    pub fn radio_list_control(&self) -> Html {
         html! {
             { for self.radios.iter().map(|r| {
                     self.radio(&r)
@@ -555,7 +571,7 @@ impl Model {
         }
     }
 
-    pub fn toggle_receivers(&self) -> Html {
+    pub fn toggle_receivers_button(&self) -> Html {
         let cls = if self.show_receiver_list == true {
             "fa-chevron-up"
         } else {
@@ -571,7 +587,7 @@ impl Model {
         }
     }
 
-    pub fn receiver_list(&self) -> Html {
+    pub fn receiver_list_control(&self) -> Html {
         match self.show_receiver_list {
             true => {
                 html! {
@@ -612,6 +628,14 @@ impl Model {
                     </table>
                 </div>
 
+                <div class="spot-filters">
+                    <label class="switch">
+                        <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.cq_only onclick=self.link.callback(move |_| Msg::ToggleCQSpotFilter ) />
+                        <span class="slider"></span>
+                    </label>
+                    { "CQ Only" }
+                </div>
+
                 { self.import_adif_form() }
             </>
         }
@@ -619,7 +643,16 @@ impl Model {
 
     pub fn version_html(&self) -> Html {
         match &self.version {
-            Some(version) => html! { <p class="version">{ format!("{} {} [Protocol Version: {}]", version.host, version.host_version, version.protocol_version) }</p> },
+            Some(version) => {
+                let host_url =
+                    match version.host.as_str() {
+                        "SparkSDR" => "http://www.ihopper.org/radio/",
+                        _ => "",
+                    };
+                html! { 
+                    <p class="version"><a href=host_url>{ version.host.to_string() }</a>{ format!(" {} [Protocol Version: {}]", version.host_version, version.protocol_version) }</p> 
+                }
+            },
             None => html! {},
         }
     }

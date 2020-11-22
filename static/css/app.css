@@ -1,0 +1,141 @@
+.new-country,.new-state {
+    color: green;
+}
+.import {
+    padding:10px;
+    margin:10px;
+}
+.flag-icon {
+    background-size: contain;
+    background-position: 50%;
+    background-repeat: no-repeat;
+    width: 16px;
+    height: 16px;
+    margin-right:5px;
+}
+.s { 
+    padding:10px;
+    margin:10px;
+    max-height: 500px;
+    overflow: auto;
+}
+.spot-filters {
+    margin: 0 10px;
+    padding: 0 10px;
+}
+.copy {
+    padding: 10px;
+    margin: 10px;
+    border-top: 1px solid #555;
+}
+.copy a {
+    color: #000;
+    text-decoration: underline;
+}
+.radio-control button {
+    margin-left: 5px;
+}
+.receiver-control, .radio-control, .control-bar {
+    border:2px solid #555;
+    padding:10px;
+    margin:10px;
+    float:left;
+    border-radius:3px;
+}
+.control-bar {
+    border:2px solid transparent !important
+}
+.receiver-control {
+    width: 15em
+}
+form.selected {
+    background-color: #ebebeb;
+}
+.receiver-control .frequency, .receiver-control .up-controls,.receiver-control .down-controls {
+    font-family: "Courier New", Courier, monospace !important;
+    font-size: 32px !important;
+    text-align:center;
+}
+.receiver-control .frequency span {
+    color: #cecece;
+}
+.receiver-control .frequency .active {
+    font-weight: bold;
+    color: #555 !important;
+}
+.receiver-control select { 
+    background-color: #fff;
+    border:1px solid #cecece;
+}
+#frequency {
+    margin-top:-0.5em;
+}
+.receiver-control .up-controls {
+    position: relative;
+    z-index:20;
+    top:-0.7em;
+}
+.receiver-control .down-controls {
+    position: relative;
+    z-index:20;
+    top:-0.9em;
+}
+.receiver-control .up-controls,.receiver-control .up-controls a,.receiver-control .down-controls,.receiver-control .down-controls a {
+    color:transparent;
+    height:10px;
+}
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 24px;
+  margin-right:10px;
+}
+
+/* Hide default HTML checkbox */
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* The slider */
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+  border-radius:3px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+  border-radius: 2px;
+}
+
+input:checked + .slider {
+  background-color: #00d1b2;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #00d1b2;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}

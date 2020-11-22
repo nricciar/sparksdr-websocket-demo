@@ -6,91 +6,12 @@
         <title>Receivers</title>
         <script defer src="https://use.fontawesome.com/releases/v5.3.1/js/all.js"></script>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.0/css/bulma.min.css">
+        <link rel="stylesheet" href="css/app.css">
         <link rel="stylesheet" href="css/flag-icon.min.css">
         <script type="module">
             import init from "./wasm.js"
             init()
         </script>
-        <style type="text/css">
-        .new-country,.new-state {
-            color: green;
-        }
-        .import {
-            padding:10px;
-            margin:10px;
-        }
-        .flag-icon {
-            background-size: contain;
-            background-position: 50%;
-            background-repeat: no-repeat;
-            width: 16px;
-            height: 16px;
-            margin-right:5px;
-        }
-        .s { 
-            padding:10px;
-            margin:10px;
-            max-height: 500px;
-            overflow: auto;
-        }
-        .version {
-            padding: 10px;
-            margin: 10px;
-            border-top: 1px solid #555;
-        }
-        .radio-control button {
-            margin-left: 5px;
-        }
-        .receiver-control, .radio-control, .control-bar {
-            border:2px solid #555;
-            padding:10px;
-            margin:10px;
-            float:left;
-            border-radius:3px;
-        }
-        .control-bar {
-            border:2px solid transparent !important
-        }
-        .receiver-control {
-            width: 15em
-        }
-        form.selected {
-            background-color: #ebebeb;
-        }
-        .receiver-control .frequency, .receiver-control .up-controls,.receiver-control .down-controls {
-            font-family: "Courier New", Courier, monospace !important;
-            font-size: 32px !important;
-            text-align:center;
-        }
-        .receiver-control .frequency span {
-            color: #cecece;
-        }
-        .receiver-control .frequency .active {
-            font-weight: bold;
-            color: #555 !important;
-        }
-        .receiver-control select { 
-            background-color: #fff;
-            border:1px solid #cecece;
-        }
-        #frequency {
-            margin-top:-0.5em;
-        }
-        .receiver-control .up-controls {
-            position: relative;
-            z-index:20;
-            top:-0.7em;
-        }
-        .receiver-control .down-controls {
-            position: relative;
-            z-index:20;
-            top:-0.9em;
-        }
-        .receiver-control .up-controls,.receiver-control .up-controls a,.receiver-control .down-controls,.receiver-control .down-controls a {
-            color:transparent;
-            height:10px;
-        }
-        </style>
     </head>
     <body></body>
 </html>
