@@ -13,7 +13,7 @@ use yew::services::fetch::{FetchService, Request, Response};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use uuid::Uuid;
 use std::str;
-use web_sys::{AudioContext, AudioBuffer, GainNode};
+use web_sys::{AudioContext, AudioBuffer, GainNode, AnalyserNode, HtmlCanvasElement};
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -65,7 +65,10 @@ pub struct Model {
     // audio playback
     audio_ctx: AudioContext,
     gain: GainNode,
-    audio_pos: f64
+    pub analyser: AnalyserNode,
+    audio_pos: f64,
+    pub node_ref: NodeRef,
+    pub canvas: Option<HtmlCanvasElement>,
 }
 
 // Currently this is unused as there is only one route: /
@@ -157,14 +160,14 @@ impl Model {
 
         // audio channel
         let audio_ctx = web_sys::AudioContext::new().unwrap();
-
         let destination = audio_ctx.destination();
+
+        let analyser = audio_ctx.create_analyser().unwrap();
+        analyser.connect_with_audio_node(&destination).unwrap();
+
         let gain = audio_ctx.create_gain().unwrap();
         gain.gain().set_value(1.0);
-        gain.connect_with_audio_node(&destination).unwrap();
-
-        let analyzer = audio_ctx.create_analyser().unwrap();
-        analyzer.connect_with_audio_node(&destination).unwrap();
+        gain.connect_with_audio_node(&analyser).unwrap();
 
         Model {
             route_service,
@@ -187,7 +190,10 @@ impl Model {
             callsigns: Vec::new(),
             audio_ctx: audio_ctx,
             gain: gain,
-            audio_pos: 0.0
+            analyser: analyser,
+            audio_pos: 0.0,
+            canvas: None,
+            node_ref: NodeRef::default(),
         }
     }
 
@@ -199,6 +205,19 @@ impl Model {
                 self.default_receiver = Some(self.receivers[0].id);
             },
             _ => ()
+        }
+    }
+
+    pub fn default_receiver(&self) -> Option<Receiver> {
+        match self.default_receiver {
+            Some(receiver_id) => {
+                if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
+                    Some(self.receivers[index].clone())
+                } else {
+                    None
+                }
+            },
+            None => None
         }
     }
 
@@ -792,10 +811,9 @@ impl Model {
                 ("receiver-control", false)
             };
         let mute_unmute_class =
-            if self.gain.gain().value() == 0.0 {
-                "fas fa-volume-mute"
-            } else {
-                "fas fa-volume-up"
+            match self.gain.gain().value() {
+                0.0 => "fas fa-volume-mute",
+                _ => "fas fa-volume-up"
             };
 
         html! {
@@ -838,7 +856,7 @@ impl Model {
                             html! {
                                 <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::MuteUnmute )>
                                     <span class="icon is-small">
-                                    <i class=mute_unmute_class></i>
+                                        <i class=mute_unmute_class>{ " " }</i>
                                     </span>
                                 </button>
                             }

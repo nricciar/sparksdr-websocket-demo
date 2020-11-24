@@ -2,6 +2,9 @@
 use wasm_bindgen::prelude::*;
 use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
 use yew::{events::KeyboardEvent};
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d};
 
 use ham_rs::rig::{Command,CommandResponse};
 
@@ -80,6 +83,25 @@ impl Component for Model {
                 self.send_command(Command::RemoveReceiver{ ID: receiver_id });
             },
             Msg::Tick => { // self.enable_ticks(seconds)
+                let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
+                self.analyser.get_byte_frequency_data(&mut data);
+                self.console.log(&format!("{:?}", data));
+
+                match &self.canvas {
+                    Some(canvas) => {
+                        self.console.log(&format!("found canvas: {:?}", canvas));
+                        let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
+                        for (i,d) in data.iter().enumerate() {
+                            ctx.set_fill_style(&format!("rgb({}, 10, 10)", d).into());
+                            ctx.fill_rect(i as f64, 0 as f64, 1 as f64, 1 as f64);
+                        }
+                        ctx.translate(0 as f64,1 as f64).unwrap();
+                        ctx.set_transform(1 as f64, 0 as f64, 0 as f64, 1 as f64, 0 as f64, 0 as f64).unwrap();
+                    },
+                    None => {
+                        self.console.log("unable to find canvas");
+                    }
+                }
             },
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
@@ -154,12 +176,17 @@ impl Component for Model {
         let mut model = Model::new(link);
         model.connect("ws://localhost:4649/Spark");
         // emit Msg::Tick every 10 seconds
-        //model.enable_ticks(10);
+        model.enable_ticks(1);
         model
     }
 
     fn change(&mut self, _: Self::Properties) -> ShouldRender {
         true
+    }
+
+    fn rendered(&mut self, first_render: bool) {
+        let canvas = self.node_ref.cast::<HtmlCanvasElement>().unwrap();
+        self.canvas = Some(canvas);
     }
 
     fn view(&self) -> Html {
@@ -178,6 +205,9 @@ impl Component for Model {
                             <div style="clear:both"></div>
 
                             { self.receiver_list_control() }
+
+                            <div style="clear:both"></div>
+                            <canvas ref=self.node_ref.clone() width="512" height="300" style="display: block; background-color: black ;" />
 
                             { self.spots_view() }
                         </>
