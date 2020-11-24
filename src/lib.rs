@@ -106,7 +106,13 @@ impl Component for Model {
                 self.send_command(Command::SubscribeToSpots{ Enable: true });
             },
             Msg::ReceivedAudio(data) => {
-                self.handle_audio_data(data);
+                self.handle_incoming_audio_data(data);
+            },
+            Msg::AudioDecoded(data) => {
+                self.play_next(data);
+            },
+            Msg::SetGain(gain) => {
+                self.set_gain(gain);
             },
             Msg::RouteChanged(route) => {
                 self.route = route;
@@ -174,7 +180,7 @@ impl Component for Model {
                         <div class="container">
                             <h1 class="title">{ "Disconnected" }</h1>
                             <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
-                            <div class="field is-grouped" style="width:30em">
+                            <div class="field is-grouped ws-connection">
                             <input class="input"
                                 value=&self.ws_location
                                 oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
@@ -190,8 +196,10 @@ impl Component for Model {
                 }
             }
             <div class="copy">
-                { self.version_html() }
-                <p><a href="https://github.com/nricciar/sparksdr-websocket-demo" target="_blank">{ "sparksdr-websocket-demo @ github" }</a></p>
+                <div class=if self.is_connected() { "" } else { "container" }>
+                    { self.version_html() }
+                    <p><a href="https://github.com/nricciar/sparksdr-websocket-demo" target="_blank">{ "sparksdr-websocket-demo @ github" }</a></p>
+                </div>
             </div>
             </>
         }

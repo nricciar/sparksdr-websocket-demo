@@ -1,3 +1,6 @@
+.container .title { margin-top: 2em }
+.ws-connection { width:30em;margin-bottom:8em;padding-top:10px }
+.ws-connection input { margin-right:0.5em }
 .new-country,.new-state {
     color: green;
 }

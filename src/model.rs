@@ -13,9 +13,7 @@ use yew::services::fetch::{FetchService, Request, Response};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use uuid::Uuid;
 use std::str;
-use web_sys::{AudioContext, AudioBuffer, AudioBufferSourceNode};
-use std::cell::RefCell;
-use std::rc::Rc;
+use web_sys::{AudioContext, AudioBuffer, GainNode};
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -63,8 +61,8 @@ pub struct Model {
     callsigns: Vec<CallsignInfo>,
     // audio playback
     audio_ctx: AudioContext,
-    source: AudioBufferSourceNode,
-    buffer: Rc<RefCell<Option<AudioBuffer>>>,
+    gain: GainNode,
+    audio_pos: f64
 }
 
 // Currently this is unused as there is only one route: /
@@ -128,6 +126,8 @@ pub enum Msg {
     TogglePower(Uuid),
     // Not implemented (future support for audio data)
     ReceivedAudio(js_sys::ArrayBuffer),
+    AudioDecoded(AudioBuffer),
+    SetGain(f32),
     // UI toggle show/hide receiver list
     ToggleReceiverList,
     // None
@@ -152,21 +152,15 @@ impl Model {
         route_service.register_callback(callback);
 
         // audio channel
-        let buffer = Rc::new(RefCell::new(None));
         let audio_ctx = web_sys::AudioContext::new().unwrap();
-        let source = audio_ctx.create_buffer_source().unwrap();
 
         let destination = audio_ctx.destination();
         let gain = audio_ctx.create_gain().unwrap();
         gain.gain().set_value(1.0);
         gain.connect_with_audio_node(&destination).unwrap();
-        source.connect_with_audio_node(&gain).unwrap();
 
         let analyzer = audio_ctx.create_analyser().unwrap();
         analyzer.connect_with_audio_node(&destination).unwrap();
-
-        source.set_loop(false);
-        source.start().unwrap();
 
         Model {
             route_service,
@@ -188,8 +182,8 @@ impl Model {
             tasks: Vec::new(),
             callsigns: vec![],
             audio_ctx: audio_ctx,
-            source: source,
-            buffer: buffer,
+            gain: gain,
+            audio_pos: 0.0
         }
     }
 
@@ -427,80 +421,32 @@ impl Model {
         }
     }
 
-    pub fn handle_audio_data(&mut self, data: js_sys::ArrayBuffer) {
-        // Both the commented out code and what is below are broken in different ways
-        // The uncommented code will play the incoming data immedietly on top of what
-        // is currently playing, The commented out code will _replace_ what is currently
-        // playing with the incoming data.
-        //
-        // TODO: need to sequence the incoming data to play immedietly after previous
-        // data finishes playing.
-        //
-
-        //let moved_buffer = self.buffer.clone();
-        //let moved_source = self.source.clone();
-
+    pub fn handle_incoming_audio_data(&mut self, data: js_sys::ArrayBuffer) {
         let moved_context = self.audio_ctx.clone();
+        let success_callback = self.link.callback(Msg::AudioDecoded);
         
         spawn_local(async move {
-            Some(async move {
-                let buffer = JsFuture::from(moved_context.decode_audio_data(&data)?)
-                        .await?
-                        .dyn_into::<AudioBuffer>();
-
-                let moved_buffer = buffer.clone();
-                match moved_buffer {
-                    Ok(moved_buffer) => {
-                        let source = moved_context.create_buffer_source().unwrap();
-                        source.set_buffer(Some(&moved_buffer));
-                        let destination = moved_context.destination();
-                        source.connect_with_audio_node(&destination).unwrap();
-                        source.set_loop(false);
-                        source.start().unwrap();
-                    },
-                    Err(err) => {
-                        ConsoleService::new().log(&format!("audo buffer error: {:?}", err));
-                    }
+            let future = JsFuture::from(moved_context.decode_audio_data(&data).unwrap());
+            if let Ok(value) = future.await {
+                if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
+                    success_callback.emit(decoded);
                 }
-                buffer
-            }.await.unwrap());
+            }
         });
+    }
 
-        /*spawn_local(async move {
-            *moved_buffer.borrow_mut() = Some(async move {
-                //JsFuture::from(decode_audio(&data))
-                //    .await?
-                //    .dyn_into::<AudioBuffer>()
-                let buffer = JsFuture::from(moved_context.decode_audio_data(&data)?)
-                    .await?
-                    .dyn_into::<AudioBuffer>();
+    pub fn play_next(&mut self, data: AudioBuffer) {
+        let source = self.audio_ctx.create_buffer_source().unwrap();
+        source.set_buffer(Some(&data));
+        let destination = self.audio_ctx.destination();
+        source.connect_with_audio_node(&destination).unwrap();
+        source.set_loop(false);
+        source.start_with_when(self.audio_pos).unwrap();
+        self.audio_pos += data.duration();
+    }
 
-                let moved_buffer = buffer.clone();
-                match moved_buffer {
-                    Ok(moved_buffer) => {
-                        // TODO: need some kind of buffer here to append the new
-                        // audio data to instead of replacing it
-                        ConsoleService::new().log("decoded audio. adding to buffer.");
-                        //let source = moved_context.create_buffer_source().unwrap();
-                        moved_source.set_buffer(Some(&moved_buffer));
-
-                        /*let destination = moved_context.destination();
-                        let gain = moved_context.create_gain().unwrap();
-                        gain.gain().set_value(1.0);
-                        gain.connect_with_audio_node(&destination).unwrap();
-                        source.connect_with_audio_node(&gain).unwrap();
-
-                        source.set_loop(false);
-                        source.start().unwrap();*/
-                    },
-                    Err(err) => {
-                        ConsoleService::new().log(&format!("audo buffer error: {:?}", err));
-                    }
-                }
-
-                buffer
-            }.await.unwrap());
-        });*/
+    pub fn set_gain(&mut self, gain: f32) {
+        self.gain.gain().set_value(gain);
     }
 
     pub fn set_default_receiver(&mut self, receiver: Option<Uuid>) {
@@ -518,6 +464,13 @@ impl Model {
             self.link.callback(|_| Msg::Tick),
         );
         self.poll = Some(Box::new(handle))
+    }
+
+    pub fn ticks_enabled(&self) -> bool {
+        match self.poll {
+            Some(_) => true,
+            None => false,
+        }
     }
 
     pub fn read_file(&mut self, file: File) {
