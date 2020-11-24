@@ -51,7 +51,7 @@
 .receiver-control {
     width: 15em
 }
-form.selected {
+div.selected {
     background-color: #ebebeb;
 }
 .receiver-control .frequency, .receiver-control .up-controls,.receiver-control .down-controls {

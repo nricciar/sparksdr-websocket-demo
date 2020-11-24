@@ -6,7 +6,7 @@ use yew::{events::KeyboardEvent};
 use ham_rs::rig::{Command,CommandResponse};
 
 mod model;
-use model::{Model,Msg};
+use model::{Model,Msg,SpotFilter};
 
 impl Component for Model {
     type Message = Msg;
@@ -14,6 +14,14 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
+            Msg::Connected => {
+                // When we first connect to SparkSDR gather some basic information
+                self.send_command(Command::GetReceivers);
+                self.send_command(Command::GetRadios);
+                self.send_command(Command::GetVersion);
+                // Also subscribe to spots
+                self.send_command(Command::SubscribeToSpots{ Enable: true });
+            },
             Msg::CommandResponse(Ok(msg)) => {
                 match msg {
                     // getReceiversResponse: update our receiver list
@@ -30,8 +38,9 @@ impl Component for Model {
                     },
                     // spotResponse: new incoming spots
                     CommandResponse::Spots { Spots: spots } => {
+                        let cq_only = self.cq_only();
                         for spot in spots {
-                            if (self.cq_only && spot.msg.contains("CQ")) || !self.cq_only {
+                            if (cq_only && spot.msg.contains("CQ")) || !cq_only {
                                 self.add_spot(spot);
                             }
                         }
@@ -42,6 +51,15 @@ impl Component for Model {
                         self.update_receiver(receiver_id, mode, frequency);
                     }
                 }
+            },
+            Msg::ReceivedAudio(data) => {
+                self.handle_incoming_audio_data(data);
+            },
+            Msg::AudioDecoded(data) => {
+                self.play_next(data);
+            },
+            Msg::MuteUnmute => {
+                self.toggle_mute();
             },
             Msg::CommandResponse(Err(err)) => {
                 self.console.log(&format!("command response error: {}", err));
@@ -97,20 +115,6 @@ impl Component for Model {
                 self.disconnect();
                 self.console.log("Disconnected");
             },
-            Msg::Connected => {
-                // When we first connect to SparkSDR gather some basic information
-                self.send_command(Command::GetReceivers);
-                self.send_command(Command::GetRadios);
-                self.send_command(Command::GetVersion);
-                // Also subscribe to spots
-                self.send_command(Command::SubscribeToSpots{ Enable: true });
-            },
-            Msg::ReceivedAudio(data) => {
-                self.handle_incoming_audio_data(data);
-            },
-            Msg::AudioDecoded(data) => {
-                self.play_next(data);
-            },
             Msg::SetGain(gain) => {
                 self.set_gain(gain);
             },
@@ -136,7 +140,10 @@ impl Component for Model {
                 }
             },
             Msg::ToggleCQSpotFilter => {
-                self.cq_only = !self.cq_only;
+                match self.cq_only() {
+                    true => self.remove_filter(SpotFilter::CQOnly).unwrap(),
+                    false => self.add_filter(SpotFilter::CQOnly),
+                }
             }
             Msg::None => {}
         }

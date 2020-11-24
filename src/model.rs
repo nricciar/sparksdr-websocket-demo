@@ -24,6 +24,11 @@ use ham_rs::countries::{CountryInfo,Country};
 use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode,Spot};
 use ham_rs::log::LogEntry;
 
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+pub enum SpotFilter {
+    CQOnly
+}
+
 pub struct Model {
     // Currently unused
     pub route_service: RouteService<()>,
@@ -32,7 +37,6 @@ pub struct Model {
     pub console: ConsoleService,
     // Callbacks
     pub link: ComponentLink<Self>,
-
     // SparkSDR connection
     pub ws_location: String,
     wss: Option<WebSocket>,
@@ -48,8 +52,7 @@ pub struct Model {
     poll: Option<Box<dyn Task>>,
     // Spots from enabling SubscribeToSpots
     spots: Vec<Spot>,
-    pub cq_only: bool,
-
+    spot_filters: Vec<SpotFilter>,
     // Show/Hide receiver list
     show_receiver_list: bool,
     // Imported log file (ADIF format) for spot cross checking
@@ -128,6 +131,7 @@ pub enum Msg {
     ReceivedAudio(js_sys::ArrayBuffer),
     AudioDecoded(AudioBuffer),
     SetGain(f32),
+    MuteUnmute,
     // UI toggle show/hide receiver list
     ToggleReceiverList,
     // None
@@ -169,18 +173,18 @@ impl Model {
             console: ConsoleService::new(),
             ws_location: "ws://localhost:4649/Spark".to_string(),
             wss: None,
-            receivers: vec![],
-            radios: vec![],
+            receivers: Vec::new(),
+            radios: Vec::new(),
             default_receiver: None,
             version: None,
             poll: None,
-            spots: vec![],
-            cq_only: false,
+            spots: Vec::new(),
+            spot_filters: Vec::new(),
             show_receiver_list: false,
             import: None,
             reader: ReaderService::new(),
             tasks: Vec::new(),
-            callsigns: vec![],
+            callsigns: Vec::new(),
             audio_ctx: audio_ctx,
             gain: gain,
             audio_pos: 0.0
@@ -190,6 +194,12 @@ impl Model {
     // CommandResponse: getReceiversResponse
     pub fn set_receivers(&mut self, receivers: Vec<Receiver>) {
         self.receivers = receivers;
+        match self.default_receiver {
+            None => {
+                self.default_receiver = Some(self.receivers[0].id);
+            },
+            _ => ()
+        }
     }
 
     // CommandResponse: getRadioResponse
@@ -438,8 +448,7 @@ impl Model {
     pub fn play_next(&mut self, data: AudioBuffer) {
         let source = self.audio_ctx.create_buffer_source().unwrap();
         source.set_buffer(Some(&data));
-        let destination = self.audio_ctx.destination();
-        source.connect_with_audio_node(&destination).unwrap();
+        source.connect_with_audio_node(&self.gain).unwrap();
         source.set_loop(false);
         source.start_with_when(self.audio_pos).unwrap();
         self.audio_pos += data.duration();
@@ -447,6 +456,17 @@ impl Model {
 
     pub fn set_gain(&mut self, gain: f32) {
         self.gain.gain().set_value(gain);
+    }
+
+    pub fn toggle_mute(&mut self) {
+        let value = self.gain.gain().value();
+        if value == 0.0 {
+            self.gain.gain().set_value(1.0);
+            self.console.log("unmuting audio");
+        } else {
+            self.gain.gain().set_value(0.0);
+            self.console.log("muting audio");
+        }
     }
 
     pub fn set_default_receiver(&mut self, receiver: Option<Uuid>) {
@@ -555,6 +575,29 @@ impl Model {
         }
     }
 
+    pub fn add_filter(&mut self, filter: SpotFilter) {
+        self.spot_filters.push(filter);
+        self.spot_filters.sort();
+        self.spot_filters.dedup();
+    }
+
+    pub fn remove_filter(&mut self, filter:SpotFilter) -> Result<(),&'static str> {
+        match self.spot_filters.iter().position(|x| *x == filter) {
+            Some(index) => {
+                self.spot_filters.remove(index);
+                Ok(())
+            },
+            None => Err("not found")
+        }
+    }
+    
+    pub fn cq_only(&self) -> bool {
+        self.spot_filters.iter().any(|s| match s {
+            SpotFilter::CQOnly => true,
+            _ => false,
+        })
+    }
+
     pub fn spots_view(&self) -> Html {
         html! {
             <>
@@ -583,7 +626,7 @@ impl Model {
 
                 <div class="spot-filters">
                     <label class="switch">
-                        <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.cq_only onclick=self.link.callback(move |_| Msg::ToggleCQSpotFilter ) />
+                        <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.cq_only() onclick=self.link.callback(move |_| Msg::ToggleCQSpotFilter ) />
                         <span class="slider"></span>
                     </label>
                     { "CQ Only" }
@@ -742,15 +785,21 @@ impl Model {
         let tmp = self.decimal_mark(frequency_string);
         let mut inactive = true;
         let receiver_id = receiver.id;
-        let class_name = 
+        let (class_name, is_default) = 
             if Some(receiver.id) == self.default_receiver {
-                "receiver-control selected"
+                ("receiver-control selected", true)
             } else {
-                "receiver-control"
+                ("receiver-control", false)
+            };
+        let mute_unmute_class =
+            if self.gain.gain().value() == 0.0 {
+                "fas fa-volume-mute"
+            } else {
+                "fas fa-volume-up"
             };
 
         html! {
-            <form class=class_name onclick=self.link.callback(move |_| Msg::SetDefaultReceiver(receiver_id))>
+            <div class=class_name onclick=self.link.callback(move |_| Msg::SetDefaultReceiver(receiver_id))>
                 <div class="up-controls">
                     {
                         for (0..9).map(|digit| {
@@ -785,6 +834,18 @@ impl Model {
                         <i class="far fa-trash-alt"></i>
                         </span>
                     </button>
+                    { if is_default {
+                            html! {
+                                <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::MuteUnmute )>
+                                    <span class="icon is-small">
+                                    <i class=mute_unmute_class></i>
+                                    </span>
+                                </button>
+                            }
+                        } else {
+                            html! { }
+                        }
+                    }
                     <select id="mode" class="select" 
                         onchange=self.link.callback(move |e:ChangeData| 
                             match e {
@@ -800,7 +861,7 @@ impl Model {
                         }
                     </select>
                 </div>
-            </form>
+            </div>
         }
     }
 
