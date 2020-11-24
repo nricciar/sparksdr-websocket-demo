@@ -30,6 +30,13 @@ impl Component for Model {
                     // getReceiversResponse: update our receiver list
                     CommandResponse::Receivers { Receivers: receivers } => {
                         self.set_receivers(receivers);
+
+                        match self.default_receiver() {
+                            Some(receiver) => {
+                                self.send_command(Command::SubscribeToAudio{ RxID: receiver.id, Enable: true })
+                            },
+                            None => ()
+                        }
                     },
                     //  update our radio list
                     CommandResponse::Radios { Radios: radios } => {
@@ -56,10 +63,10 @@ impl Component for Model {
                 }
             },
             Msg::ReceivedAudio(data) => {
-                self.handle_incoming_audio_data(data);
+                self.handle_incoming_audio_data(&data);
             },
             Msg::AudioDecoded(data) => {
-                self.play_next(data);
+                self.play_next(&data);
             },
             Msg::MuteUnmute => {
                 self.toggle_mute();
@@ -83,7 +90,7 @@ impl Component for Model {
                 self.send_command(Command::RemoveReceiver{ ID: receiver_id });
             },
             Msg::Tick => { // self.enable_ticks(seconds)
-                let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
+                /*let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
                 self.analyser.get_byte_frequency_data(&mut data);
                 self.console.log(&format!("{:?}", data));
 
@@ -101,7 +108,7 @@ impl Component for Model {
                     None => {
                         self.console.log("unable to find canvas");
                     }
-                }
+                }*/
             },
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
@@ -176,7 +183,7 @@ impl Component for Model {
         let mut model = Model::new(link);
         model.connect("ws://localhost:4649/Spark");
         // emit Msg::Tick every 10 seconds
-        model.enable_ticks(1);
+        //model.enable_ticks(1);
         model
     }
 
@@ -207,7 +214,7 @@ impl Component for Model {
                             { self.receiver_list_control() }
 
                             <div style="clear:both"></div>
-                            <canvas ref=self.node_ref.clone() width="512" height="300" style="display: block; background-color: black ;" />
+                            <canvas ref=self.node_ref.clone() width="512" height="300" style="display: none; background-color: black ;" />
 
                             { self.spots_view() }
                         </>

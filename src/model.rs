@@ -65,7 +65,7 @@ pub struct Model {
     // audio playback
     audio_ctx: AudioContext,
     gain: GainNode,
-    pub analyser: AnalyserNode,
+    //pub analyser: AnalyserNode,
     audio_pos: f64,
     pub node_ref: NodeRef,
     pub canvas: Option<HtmlCanvasElement>,
@@ -162,12 +162,12 @@ impl Model {
         let audio_ctx = web_sys::AudioContext::new().unwrap();
         let destination = audio_ctx.destination();
 
-        let analyser = audio_ctx.create_analyser().unwrap();
-        analyser.connect_with_audio_node(&destination).unwrap();
+        //let analyser = audio_ctx.create_analyser().unwrap();
+        //analyser.connect_with_audio_node(&destination).unwrap();
 
         let gain = audio_ctx.create_gain().unwrap();
         gain.gain().set_value(1.0);
-        gain.connect_with_audio_node(&analyser).unwrap();
+        gain.connect_with_audio_node(&destination).unwrap();
 
         Model {
             route_service,
@@ -190,7 +190,7 @@ impl Model {
             callsigns: Vec::new(),
             audio_ctx: audio_ctx,
             gain: gain,
-            analyser: analyser,
+            //analyser: analyser,
             audio_pos: 0.0,
             canvas: None,
             node_ref: NodeRef::default(),
@@ -450,23 +450,24 @@ impl Model {
         }
     }
 
-    pub fn handle_incoming_audio_data(&mut self, data: js_sys::ArrayBuffer) {
+    pub fn handle_incoming_audio_data(&mut self, data: &js_sys::ArrayBuffer) {
         let moved_context = self.audio_ctx.clone();
         let success_callback = self.link.callback(Msg::AudioDecoded);
-        
+        let future = JsFuture::from(moved_context.decode_audio_data(data).unwrap());
+
         spawn_local(async move {
-            let future = JsFuture::from(moved_context.decode_audio_data(&data).unwrap());
             if let Ok(value) = future.await {
                 if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
+                    ConsoleService::new().log("decoded audio");
                     success_callback.emit(decoded);
                 }
             }
         });
     }
 
-    pub fn play_next(&mut self, data: AudioBuffer) {
+    pub fn play_next(&mut self, data: &AudioBuffer) {
         let source = self.audio_ctx.create_buffer_source().unwrap();
-        source.set_buffer(Some(&data));
+        source.set_buffer(Some(data));
         source.connect_with_audio_node(&self.gain).unwrap();
         source.set_loop(false);
         source.start_with_when(self.audio_pos).unwrap();

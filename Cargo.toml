@@ -38,5 +38,7 @@ features = [
   'AudioBufferSourceNode',
   'MessageEvent',
   'OfflineAudioContext',
-  'AnalyserNode'
+  'AnalyserNode',
+  'HtmlCanvasElement',
+  'CanvasRenderingContext2d'
 ]
