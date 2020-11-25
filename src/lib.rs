@@ -2,8 +2,10 @@
 use wasm_bindgen::prelude::*;
 use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
 use yew::{events::KeyboardEvent};
+use yew::services::{ConsoleService};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
 use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d};
 
 use ham_rs::rig::{Command,CommandResponse};
@@ -31,12 +33,12 @@ impl Component for Model {
                     CommandResponse::Receivers { Receivers: receivers } => {
                         self.set_receivers(receivers);
 
-                        match self.default_receiver() {
+                        /*match self.default_receiver() {
                             Some(receiver) => {
                                 self.send_command(Command::SubscribeToAudio{ RxID: receiver.id, Enable: true })
                             },
                             None => ()
-                        }
+                        }*/
                     },
                     //  update our radio list
                     CommandResponse::Radios { Radios: radios } => {
@@ -63,7 +65,7 @@ impl Component for Model {
                 }
             },
             Msg::ReceivedAudio(data) => {
-                self.handle_incoming_audio_data(&data);
+                self.handle_incoming_audio_data(data);
             },
             Msg::AudioDecoded(data) => {
                 self.play_next(&data);
@@ -72,13 +74,13 @@ impl Component for Model {
                 self.toggle_mute();
             },
             Msg::CommandResponse(Err(err)) => {
-                self.console.log(&format!("command response error: {}", err));
+                ConsoleService::error(&format!("command response error: {}", err));
             },
             Msg::CallsignInfoReady(Ok(call)) => {
                 self.cache_callsign_info(call);
             },
             Msg::CallsignInfoReady(Err(err)) => {
-                self.console.log(&format!("callsign info error: {}", err));
+                ConsoleService::error(&format!("callsign info error: {}", err));
             },
             Msg::SetDefaultReceiver(receiver_id) => {
                 self.set_default_receiver(Some(receiver_id));
@@ -116,7 +118,7 @@ impl Component for Model {
                         self.send_command(Command::SetRunning{ ID: radio_id, Running: !state });
                     },
                     None => {
-                        self.console.log(&format!("TogglePower: No radio found: {}", radio_id));
+                        ConsoleService::error(&format!("TogglePower: No radio found: {}", radio_id));
                     }
                 }
             },
@@ -134,7 +136,7 @@ impl Component for Model {
             },
             Msg::Connect => {
                 let addr = self.ws_location.to_string();
-                self.console.log(&format!("Connecting to {}", addr));
+                ConsoleService::log(&format!("Connecting to {}", addr));
                 self.connect(&addr);
             },
             Msg::UpdateWebsocketAddress(address) => {
@@ -142,7 +144,7 @@ impl Component for Model {
             },
             Msg::Disconnected => {
                 self.disconnect();
-                self.console.log("Disconnected");
+                ConsoleService::error("Disconnected");
             },
             Msg::SetGain(gain) => {
                 self.set_gain(gain);
@@ -194,6 +196,10 @@ impl Component for Model {
     fn rendered(&mut self, first_render: bool) {
         let canvas = self.node_ref.cast::<HtmlCanvasElement>().unwrap();
         self.canvas = Some(canvas);
+
+        if first_render {
+            self.initialize_audio();
+        }
     }
 
     fn view(&self) -> Html {

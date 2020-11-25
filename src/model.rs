@@ -33,8 +33,6 @@ pub struct Model {
     // Currently unused
     pub route_service: RouteService<()>,
     pub route: Route<()>,
-    // Console logging
-    pub console: ConsoleService,
     // Callbacks
     pub link: ComponentLink<Self>,
     // SparkSDR connection
@@ -45,7 +43,7 @@ pub struct Model {
     // List of radios from the getRadios command
     radios: Vec<Radio>,
     // Currently selected receiver
-    default_receiver: Option<Uuid>,
+    default_receiver: Option<u32>,
     // Version response from the getVersion command
     version: Option<Version>,
     // TODO: temporary to keep local ui updated
@@ -63,10 +61,11 @@ pub struct Model {
     // Local callsign cache
     callsigns: Vec<CallsignInfo>,
     // audio playback
-    audio_ctx: AudioContext,
-    gain: GainNode,
+    audio_ctx: Option<AudioContext>,
+    gain: Option<GainNode>,
     //pub analyser: AnalyserNode,
-    audio_pos: f64,
+    audio_pos: u64,
+    audio_start_time: f64,
     pub node_ref: NodeRef,
     pub canvas: Option<HtmlCanvasElement>,
 }
@@ -118,18 +117,18 @@ pub enum Msg {
     // Command responses from SparkSDR (e.g. getReceiversResponse, getVersionResponse)
     CommandResponse(Result<CommandResponse, Error>),
     // UI request frequency change up/down on digit X for receiver Uuid
-    FrequencyUp(Uuid, i32), // digit 0 - 8 
-    FrequencyDown(Uuid, i32), // digit 0 - 8
+    FrequencyUp(u32, i32), // digit 0 - 8 
+    FrequencyDown(u32, i32), // digit 0 - 8
     // UI request to change receiver Uuid mode
-    ModeChanged(Uuid, Mode),
+    ModeChanged(u32, Mode),
     // UI request to set the default receiver to Uuid
-    SetDefaultReceiver(Uuid),
+    SetDefaultReceiver(u32),
     // UI request to add a receiver to radio Uuid
-    AddReceiver(Uuid),
+    AddReceiver(u32),
     // UI request to remove a receiver by Uuid
-    RemoveReceiver(Uuid),
+    RemoveReceiver(u32),
     // Toggle radio power state
-    TogglePower(Uuid),
+    TogglePower(u32),
     // Not implemented (future support for audio data)
     ReceivedAudio(js_sys::ArrayBuffer),
     AudioDecoded(AudioBuffer),
@@ -158,22 +157,10 @@ impl Model {
         let callback = link.callback(Msg::RouteChanged);
         route_service.register_callback(callback);
 
-        // audio channel
-        let audio_ctx = web_sys::AudioContext::new().unwrap();
-        let destination = audio_ctx.destination();
-
-        //let analyser = audio_ctx.create_analyser().unwrap();
-        //analyser.connect_with_audio_node(&destination).unwrap();
-
-        let gain = audio_ctx.create_gain().unwrap();
-        gain.gain().set_value(1.0);
-        gain.connect_with_audio_node(&destination).unwrap();
-
         Model {
             route_service,
             route,
             link,
-            console: ConsoleService::new(),
             ws_location: "ws://localhost:4649/Spark".to_string(),
             wss: None,
             receivers: Vec::new(),
@@ -188,13 +175,30 @@ impl Model {
             reader: ReaderService::new(),
             tasks: Vec::new(),
             callsigns: Vec::new(),
-            audio_ctx: audio_ctx,
-            gain: gain,
+            audio_ctx: None,
+            gain: None,
             //analyser: analyser,
-            audio_pos: 0.0,
+            audio_pos: 0,
+            audio_start_time: 0.0,
             canvas: None,
             node_ref: NodeRef::default(),
         }
+    }
+
+    pub fn initialize_audio(&mut self) {
+        // audio channel
+        let audio_ctx = web_sys::AudioContext::new().unwrap();
+        let destination = audio_ctx.destination();
+
+        //let analyser = audio_ctx.create_analyser().unwrap();
+        //analyser.connect_with_audio_node(&destination).unwrap();
+
+        let gain = audio_ctx.create_gain().unwrap();
+        gain.gain().set_value(1.0);
+        gain.connect_with_audio_node(&destination).unwrap();
+
+        self.audio_ctx = Some(audio_ctx);
+        self.gain = Some(gain);
     }
 
     // CommandResponse: getReceiversResponse
@@ -232,12 +236,12 @@ impl Model {
     }
 
     // CommandResponse: ReceiverResponse
-    pub fn update_receiver(&mut self, receiver_id: Uuid, mode: Mode, frequency: f32) {
+    pub fn update_receiver(&mut self, receiver_id: u32, mode: Mode, frequency: f32) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             self.receivers[index].frequency = frequency;
             self.receivers[index].mode = mode;
         } else {
-            self.console.log(&format!("Attempted to update a receiver that does not exist: {}", receiver_id));
+            ConsoleService::error(&format!("Attempted to update a receiver that does not exist: {}", receiver_id));
         }
     }
 
@@ -273,9 +277,8 @@ impl Model {
                 // info from server.  Response will be handled by the Msg::CallsignInfoReady
                 // message handler
                 Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
-                    let mut fs = FetchService::new();
                     let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
-                    let ft = fs.fetch(request, callback).unwrap();
+                    let ft = FetchService::fetch(request, callback).unwrap();
 
                     let info = CallsignInfo::Requested((call, ft));
                     self.callsigns.push(info);
@@ -295,14 +298,14 @@ impl Model {
         }
     }
 
-    pub fn change_receiver_mode(&mut self, receiver_id: Uuid, mode: Mode) {
+    pub fn change_receiver_mode(&mut self, receiver_id: u32, mode: Mode) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             self.receivers[index].mode = mode.clone();
             self.send_command(Command::SetMode { Mode: mode.clone(), ID: receiver_id });
         }
     }
 
-    pub fn frequency_up(&mut self, receiver_id: Uuid, digit: i32) {
+    pub fn frequency_up(&mut self, receiver_id: u32, digit: i32) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             if digit == 0 { self.receivers[index].frequency += 100000000.0 }
             if digit == 1 { self.receivers[index].frequency += 10000000.0 }
@@ -318,7 +321,7 @@ impl Model {
         }
     }
 
-    pub fn frequency_down(&mut self, receiver_id: Uuid, digit: i32) {
+    pub fn frequency_down(&mut self, receiver_id: u32, digit: i32) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             if digit == 0 { self.receivers[index].frequency -= 100000000.0 }
             if digit == 1 { self.receivers[index].frequency -= 10000000.0 }
@@ -373,7 +376,7 @@ impl Model {
         
         let notify = cbnot.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
-            ConsoleService::new().log("rig control: connection opened");
+            ConsoleService::log("rig control: connection opened");
             notify.emit(WebSocketStatus::Opened);
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
@@ -381,7 +384,7 @@ impl Model {
 
         let notify = cbnot.clone();
         let onerror_callback = Closure::wrap(Box::new(move |_| {
-            ConsoleService::new().log("rig control: connection error");
+            ConsoleService::error("rig control: connection error");
             notify.emit(WebSocketStatus::Error);
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
@@ -389,7 +392,7 @@ impl Model {
 
         let notify = cbnot.clone();
         let onclose_callback = Closure::wrap(Box::new(move |_| {
-            ConsoleService::new().log("rig control: connection closed");
+            ConsoleService::error("rig control: connection closed");
             notify.emit(WebSocketStatus::Closed);
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
@@ -406,16 +409,17 @@ impl Model {
                 }
             }
         });
+
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
                 //let array = js_sys::Uint8Array::new(&abuf);
                 cbout.emit(WebsocketMsgType::BinaryMsg(abuf));
             } else if let Ok(_blob) = e.data().dyn_into::<web_sys::Blob>() {
-                ConsoleService::new().log("rig control: unexpected blob message from server");
+                ConsoleService::error("rig control: unexpected blob message from server");
             } else if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 cbout.emit(WebsocketMsgType::TextMsg(txt.into()));
             } else {
-                ConsoleService::new().log("rig control: unexpected message from server");
+                ConsoleService::error("rig control: unexpected message from server");
             }
         }) as Box<dyn FnMut(MessageEvent)>);
         ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
@@ -444,52 +448,74 @@ impl Model {
         let j = serde_json::to_string(&cmd).unwrap();
         if let Some(wss) = &self.wss {
             wss.send_with_str(&j).unwrap();
-            self.console.log(&format!("sent: {}", j));
+            ConsoleService::log(&format!("sent: {}", j));
         } else {
-            self.console.error(&format!("attempted to send: {}, but not connected", j));
+            ConsoleService::error(&format!("attempted to send: {}, but not connected", j));
         }
     }
 
-    pub fn handle_incoming_audio_data(&mut self, data: &js_sys::ArrayBuffer) {
-        let moved_context = self.audio_ctx.clone();
-        let success_callback = self.link.callback(Msg::AudioDecoded);
-        let future = JsFuture::from(moved_context.decode_audio_data(data).unwrap());
-
-        spawn_local(async move {
-            if let Ok(value) = future.await {
-                if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
-                    ConsoleService::new().log("decoded audio");
-                    success_callback.emit(decoded);
+    pub fn handle_incoming_audio_data(&mut self, data: js_sys::ArrayBuffer) {
+        if let Some(audio_ctx) = &self.audio_ctx {
+            let moved_context = audio_ctx.clone();
+            let success_callback = self.link.callback(Msg::AudioDecoded);
+            
+            spawn_local(async move {
+                let future = JsFuture::from(moved_context.decode_audio_data(&data.slice(1)).unwrap());
+                match future.await {
+                    Ok(value) => {
+                        if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
+                            success_callback.emit(decoded);
+                        }
+                    },
+                    Err(err) => {
+                        ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     pub fn play_next(&mut self, data: &AudioBuffer) {
-        let source = self.audio_ctx.create_buffer_source().unwrap();
-        source.set_buffer(Some(data));
-        source.connect_with_audio_node(&self.gain).unwrap();
-        source.set_loop(false);
-        source.start_with_when(self.audio_pos).unwrap();
-        self.audio_pos += data.duration();
-    }
+        match (&self.audio_ctx, &self.gain) {
+            (Some(audio_ctx), Some(gain)) => {
+                if self.audio_pos == 0 {
+                    self.audio_start_time = audio_ctx.current_time();
+                }
+                self.audio_pos += 1;
 
-    pub fn set_gain(&mut self, gain: f32) {
-        self.gain.gain().set_value(gain);
-    }
-
-    pub fn toggle_mute(&mut self) {
-        let value = self.gain.gain().value();
-        if value == 0.0 {
-            self.gain.gain().set_value(1.0);
-            self.console.log("unmuting audio");
-        } else {
-            self.gain.gain().set_value(0.0);
-            self.console.log("muting audio");
+                let source = audio_ctx.create_buffer_source().unwrap();
+                source.set_buffer(Some(data));
+                source.connect_with_audio_node(gain).unwrap();
+                source.set_loop(false);
+                let play_time = self.audio_start_time as f64 + (self.audio_pos as f64 * 512.0 / 48000.0) + 0.1;
+                source.start_with_when(play_time).unwrap();
+            },
+            _ => {
+                ConsoleService::error("play_next: audio not initalized");
+            }
         }
     }
 
-    pub fn set_default_receiver(&mut self, receiver: Option<Uuid>) {
+    pub fn set_gain(&mut self, gain: f32) {
+        if let Some(g) = &self.gain {
+            g.gain().set_value(gain);
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        if let Some(g) = &self.gain {
+            let value = g.gain().value();
+            if value == 0.0 {
+                g.gain().set_value(1.0);
+                ConsoleService::log("unmuting audio");
+            } else {
+                g.gain().set_value(0.0);
+                ConsoleService::log("muting audio");
+            }
+        }
+    }
+
+    pub fn set_default_receiver(&mut self, receiver: Option<u32>) {
         self.default_receiver = receiver;
     }
 
@@ -498,11 +524,9 @@ impl Model {
     }
 
     pub fn enable_ticks(&mut self, interval: u64) {
-        let mut is = IntervalService::new();
-        let handle = is.spawn(
-            Duration::from_secs(interval),
-            self.link.callback(|_| Msg::Tick),
-        );
+        let handle = IntervalService::spawn(
+            Duration::from_secs(interval), 
+            self.link.callback(|_| Msg::Tick));
         self.poll = Some(Box::new(handle))
     }
 
@@ -531,14 +555,14 @@ impl Model {
                             records.push(entry);
                         },
                         Err(e) => {
-                            self.console.log(&format!("failed to import record [{:?}]: {:?}", e, record));
+                            ConsoleService::error(&format!("failed to import record [{:?}]: {:?}", e, record));
                         }
                     }
                 }
                 self.import = Some(records);
             },
             Err(e) => {
-                self.console.log(&format!("unable to load adif: {}", e));
+                ConsoleService::error(&format!("unable to load adif: {}", e));
             }
         }
     }
@@ -547,7 +571,7 @@ impl Model {
         self.import = None;
     }
 
-    pub fn get_radio_power_state(&self, radio_id: Uuid) -> Option<bool> {
+    pub fn get_radio_power_state(&self, radio_id: u32) -> Option<bool> {
         if let Some(index) = self.radios.iter().position(|i| i.id == radio_id) {
             Some(self.radios[index].running)
         } else {
@@ -812,8 +836,8 @@ impl Model {
                 ("receiver-control", false)
             };
         let mute_unmute_class =
-            match self.gain.gain().value() {
-                0.0 => "fas fa-volume-mute",
+            match &self.gain {
+                Some(gain) if gain.gain().value() == 0.0 => "fas fa-volume-mute",
                 _ => "fas fa-volume-up"
             };
 
