@@ -78,7 +78,7 @@ impl Component for Model {
                         }
                     }
                 }
-                false
+                true
             },
             Msg::ReceivedAudio(data) => {
                 match (self.audio_ctx(), self.gain()) {
