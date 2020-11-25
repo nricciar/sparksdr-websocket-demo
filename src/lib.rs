@@ -7,7 +7,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d,AudioBuffer};
-use yewtil::future::LinkFuture;
 use wasm_bindgen_futures::{spawn_local};
 
 use ham_rs::rig::{Command,CommandResponse};
@@ -28,6 +27,7 @@ impl Component for Model {
                 self.send_command(Command::GetVersion);
                 // Also subscribe to spots
                 self.send_command(Command::SubscribeToSpots{ enable: true });
+                false
             },
             Msg::CommandResponse(Ok(msg)) => {
                 match msg {
@@ -58,14 +58,27 @@ impl Component for Model {
                         self.update_receiver(receiver_id, mode, frequency);
                     }
                 }
+                true
             },
             Msg::EnableAudio => {
-                match self.default_receiver() {
-                    Some(receiver) => {
-                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver.id, enable: true })
+                match self.subscribed_audio {
+                    Some(audio_channel) => {
+                        self.send_command(Command::SubscribeToAudio{ rx_id: audio_channel, enable: false });
+                        self.subscribed_audio = None;
+                        ConsoleService::log("unsubscribed to audio");
                     },
-                    None => ()
+                    None => {
+                        match self.default_receiver() {
+                            Some(receiver) => {
+                                self.send_command(Command::SubscribeToAudio{ rx_id: receiver.id, enable: true });
+                                self.subscribed_audio = Some(receiver.id);
+                                ConsoleService::log(&format!("subscribed to audio channel: {}", receiver.id));
+                            },
+                            None => ()
+                        }
+                    }
                 }
+                false
             },
             Msg::ReceivedAudio(data) => {
                 match (self.audio_ctx(), self.gain()) {
@@ -101,27 +114,43 @@ impl Component for Model {
                     },
                     _ => ()
                 }
+                false
             },
             Msg::MuteUnmute => {
                 self.toggle_mute();
+                true
             },
             Msg::CommandResponse(Err(err)) => {
                 ConsoleService::error(&format!("command response error: {}", err));
+                false
             },
             Msg::CallsignInfoReady(Ok(call)) => {
                 self.cache_callsign_info(call);
+                true
             },
             Msg::CallsignInfoReady(Err(err)) => {
                 ConsoleService::error(&format!("callsign info error: {}", err));
+                false
             },
             Msg::SetDefaultReceiver(receiver_id) => {
+                match self.subscribed_audio {
+                    Some(previous_audio_channel) => {
+                        self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
+                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver_id, enable: true });
+                        self.subscribed_audio = Some(receiver_id);
+                    },
+                    None => ()
+                }
                 self.set_default_receiver(Some(receiver_id));
+                true
             },
             Msg::AddReceiver(radio_id) => {
                 self.send_command(Command::AddReceiver { id: radio_id });
+                false
             },
             Msg::RemoveReceiver(receiver_id) => {
                 self.send_command(Command::RemoveReceiver{ id: receiver_id });
+                false
             },
             Msg::Tick => { // self.enable_ticks(seconds)
                 /*let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
@@ -143,6 +172,7 @@ impl Component for Model {
                         self.console.log("unable to find canvas");
                     }
                 }*/
+                true
             },
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
@@ -153,64 +183,79 @@ impl Component for Model {
                         ConsoleService::error(&format!("TogglePower: No radio found: {}", radio_id));
                     }
                 }
+                false
             },
             Msg::ToggleReceiverList => {
                 self.toggle_receiver_list();
+                true
             },
             Msg::ModeChanged(receiver_id, mode) => {
                 self.change_receiver_mode(receiver_id, mode);
+                true
             },
             Msg::FrequencyDown(receiver_id, digit) => {
                 self.frequency_down(receiver_id, digit);
+                true
             },
             Msg::FrequencyUp(receiver_id, digit) => {
                 self.frequency_up(receiver_id, digit);
+                true
             },
             Msg::Connect => {
                 let addr = self.ws_location.to_string();
                 ConsoleService::log(&format!("Connecting to {}", addr));
                 self.connect(&addr);
+                true
             },
             Msg::UpdateWebsocketAddress(address) => {
                 self.ws_location = address;
+                true
             },
             Msg::Disconnected => {
                 self.disconnect();
                 ConsoleService::error("Disconnected");
+                true
             },
             Msg::SetGain(gain) => {
                 self.set_gain(gain);
+                true
             },
             Msg::RouteChanged(route) => {
                 self.route = route;
+                true
             },
             Msg::ChangeRoute(route) => {
                 // This might be derived in the future
                 self.route = route.into();
                 self.route_service.set_route(&self.route.route, ());
+                true
             },
             Msg::CancelImport => {
                 self.clear_adif_data();
+                true
             },
             Msg::ConfirmImport => {
+                true
             },
             Msg::Loaded(data) => {
                 self.load_adif_data(data);
+                true
             },
             Msg::Files(files, _) => {
                 for file in files.into_iter() {
                     self.read_file(file);
                 }
+                true
             },
             Msg::ToggleCQSpotFilter => {
                 match self.cq_only() {
                     true => self.remove_filter(SpotFilter::CQOnly).unwrap(),
                     false => self.add_filter(SpotFilter::CQOnly),
                 }
+                true
             }
-            Msg::None => {}
+            Msg::None => { false }
         }
-        true
     }
 
     fn create(_props: Self::Properties, link: ComponentLink<Self>) -> Self {

@@ -66,6 +66,7 @@ pub struct Model {
     pub audio_start_time: f64,
     pub node_ref: NodeRef,
     pub canvas: Option<HtmlCanvasElement>,
+    pub subscribed_audio: Option<u32>,
 }
 
 // Currently this is unused as there is only one route: /
@@ -180,6 +181,7 @@ impl Model {
             audio_start_time: 0.0,
             canvas: None,
             node_ref: NodeRef::default(),
+            subscribed_audio: None,
         }
     }
 
@@ -575,9 +577,14 @@ impl Model {
     }
 
     pub fn enable_audio_button(&self) -> Html {
+        let msg =
+            match self.subscribed_audio {
+                Some(_) => "Disable Audio",
+                None => "Enable Audio"
+            };
         html! {
             <button class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio)>
-                <span>{ "Enable Audio" }</span>
+                <span>{ msg }</span>
             </button>
         }
     }
