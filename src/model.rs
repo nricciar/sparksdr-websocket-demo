@@ -11,13 +11,11 @@ use yew::services::reader::{File, FileData, ReaderService, ReaderTask};
 use yew::services::websocket::{WebSocketStatus};
 use yew::services::fetch::{FetchService, Request, Response};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
-use uuid::Uuid;
 use std::str;
-use web_sys::{AudioContext, AudioBuffer, GainNode, AnalyserNode, HtmlCanvasElement};
+use web_sys::{AudioContext, GainNode, HtmlCanvasElement};
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use ham_rs::Call;
 use ham_rs::countries::{CountryInfo,Country};
@@ -64,8 +62,8 @@ pub struct Model {
     audio_ctx: Option<AudioContext>,
     gain: Option<GainNode>,
     //pub analyser: AnalyserNode,
-    audio_pos: u64,
-    audio_start_time: f64,
+    pub audio_pos: u64,
+    pub audio_start_time: f64,
     pub node_ref: NodeRef,
     pub canvas: Option<HtmlCanvasElement>,
 }
@@ -131,9 +129,9 @@ pub enum Msg {
     TogglePower(u32),
     // Not implemented (future support for audio data)
     ReceivedAudio(js_sys::ArrayBuffer),
-    AudioDecoded(AudioBuffer),
     SetGain(f32),
     MuteUnmute,
+    EnableAudio,
     // UI toggle show/hide receiver list
     ToggleReceiverList,
     // None
@@ -301,7 +299,7 @@ impl Model {
     pub fn change_receiver_mode(&mut self, receiver_id: u32, mode: Mode) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             self.receivers[index].mode = mode.clone();
-            self.send_command(Command::SetMode { Mode: mode.clone(), ID: receiver_id });
+            self.send_command(Command::SetMode { mode: mode.clone(), id: receiver_id });
         }
     }
 
@@ -317,7 +315,7 @@ impl Model {
             if digit == 7 { self.receivers[index].frequency += 10.0 }
             if digit == 8 { self.receivers[index].frequency += 1.0 }
 
-            self.send_command(Command::SetFrequency { Frequency: (self.receivers[index].frequency as i32).to_string(), ID: receiver_id });
+            self.send_command(Command::SetFrequency { frequency: (self.receivers[index].frequency as i32).to_string(), id: receiver_id });
         }
     }
 
@@ -333,7 +331,7 @@ impl Model {
             if digit == 7 { self.receivers[index].frequency -= 10.0 }
             if digit == 8 { self.receivers[index].frequency -= 1.0 }
 
-            self.send_command(Command::SetFrequency { Frequency: (self.receivers[index].frequency as i32).to_string(), ID: receiver_id });
+            self.send_command(Command::SetFrequency { frequency: (self.receivers[index].frequency as i32).to_string(), id: receiver_id });
         }
     }
 
@@ -454,45 +452,17 @@ impl Model {
         }
     }
 
-    pub fn handle_incoming_audio_data(&mut self, data: js_sys::ArrayBuffer) {
-        if let Some(audio_ctx) = &self.audio_ctx {
-            let moved_context = audio_ctx.clone();
-            let success_callback = self.link.callback(Msg::AudioDecoded);
-            
-            spawn_local(async move {
-                let future = JsFuture::from(moved_context.decode_audio_data(&data.slice(1)).unwrap());
-                match future.await {
-                    Ok(value) => {
-                        if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
-                            success_callback.emit(decoded);
-                        }
-                    },
-                    Err(err) => {
-                        ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
-                    }
-                }
-            });
+    pub fn audio_ctx(&self) -> Option<AudioContext> {
+        match &self.audio_ctx {
+            Some(audio_ctx) => Some(audio_ctx.clone()),
+            None => None,
         }
     }
 
-    pub fn play_next(&mut self, data: &AudioBuffer) {
-        match (&self.audio_ctx, &self.gain) {
-            (Some(audio_ctx), Some(gain)) => {
-                if self.audio_pos == 0 {
-                    self.audio_start_time = audio_ctx.current_time();
-                }
-                self.audio_pos += 1;
-
-                let source = audio_ctx.create_buffer_source().unwrap();
-                source.set_buffer(Some(data));
-                source.connect_with_audio_node(gain).unwrap();
-                source.set_loop(false);
-                let play_time = self.audio_start_time as f64 + (self.audio_pos as f64 * 512.0 / 48000.0) + 0.1;
-                source.start_with_when(play_time).unwrap();
-            },
-            _ => {
-                ConsoleService::error("play_next: audio not initalized");
-            }
+    pub fn gain(&self) -> Option<GainNode> {
+        match &self.gain {
+            Some(gain) => Some(gain.clone()),
+            None => None,
         }
     }
 
@@ -604,6 +574,14 @@ impl Model {
         }
     }
 
+    pub fn enable_audio_button(&self) -> Html {
+        html! {
+            <button class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio)>
+                <span>{ "Enable Audio" }</span>
+            </button>
+        }
+    }
+
     pub fn receiver_list_control(&self) -> Html {
         match self.show_receiver_list {
             true => {
@@ -638,7 +616,6 @@ impl Model {
     pub fn cq_only(&self) -> bool {
         self.spot_filters.iter().any(|s| match s {
             SpotFilter::CQOnly => true,
-            _ => false,
         })
     }
 

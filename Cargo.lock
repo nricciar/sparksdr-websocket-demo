@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "ham-rs"
 version = "0.1.0"
-source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#79e1d3cac2e499acfaf3f6645f48dab7d125a6ca"
+source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#c45ed9b88e210ef73b183a2bfbd81e3a1dcc370f"
 dependencies = [
  "adif",
  "chrono",
@@ -498,6 +498,7 @@ dependencies = [
  "web-sys",
  "yew",
  "yew-router",
+ "yewtil",
 ]
 
 [[package]]
@@ -685,6 +686,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ac64ead5ea5f05873d7c12b545865ca2b8d28adfc50a49b84770a3a97265d42"
 dependencies = [
  "cfg-if",
+ "serde",
+ "serde_json",
  "wasm-bindgen-macro",
 ]
 
@@ -870,4 +873,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49bf2f66f0e61d65d1637523fa1faedd5aa291cf9cb8d8fb200678472279b672"
 dependencies = [
  "nom",
+]
+
+[[package]]
+name = "yewtil"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "003f4f533ee696c1f69d753db2c66096dec5700a93bd0bc801ab5891fec041c6"
+dependencies = [
+ "futures",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "yew",
 ]

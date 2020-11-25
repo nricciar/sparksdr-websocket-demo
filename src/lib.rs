@@ -6,7 +6,9 @@ use yew::services::{ConsoleService};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d};
+use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d,AudioBuffer};
+use yewtil::future::LinkFuture;
+use wasm_bindgen_futures::{spawn_local};
 
 use ham_rs::rig::{Command,CommandResponse};
 
@@ -25,23 +27,16 @@ impl Component for Model {
                 self.send_command(Command::GetRadios);
                 self.send_command(Command::GetVersion);
                 // Also subscribe to spots
-                self.send_command(Command::SubscribeToSpots{ Enable: true });
+                self.send_command(Command::SubscribeToSpots{ enable: true });
             },
             Msg::CommandResponse(Ok(msg)) => {
                 match msg {
                     // getReceiversResponse: update our receiver list
-                    CommandResponse::Receivers { Receivers: receivers } => {
+                    CommandResponse::Receivers { receivers } => {
                         self.set_receivers(receivers);
-
-                        /*match self.default_receiver() {
-                            Some(receiver) => {
-                                self.send_command(Command::SubscribeToAudio{ RxID: receiver.id, Enable: true })
-                            },
-                            None => ()
-                        }*/
                     },
                     //  update our radio list
-                    CommandResponse::Radios { Radios: radios } => {
+                    CommandResponse::Radios { radios } => {
                         self.set_radios(radios);
                     },
                     // getVersionResponse: update our version info
@@ -49,7 +44,7 @@ impl Component for Model {
                         self.set_version(version);
                     },
                     // spotResponse: new incoming spots
-                    CommandResponse::Spots { Spots: spots } => {
+                    CommandResponse::Spots { spots } => {
                         let cq_only = self.cq_only();
                         for spot in spots {
                             if (cq_only && spot.msg.contains("CQ")) || !cq_only {
@@ -59,16 +54,53 @@ impl Component for Model {
                         self.trim_spots(100);
                     },
                     // ReceiverResponse: receiver updates (mode/frequency)
-                    CommandResponse::ReceiverResponse{ ID: receiver_id, Frequency: frequency, Mode: mode } => {
+                    CommandResponse::ReceiverResponse{ id: receiver_id, frequency, mode } => {
                         self.update_receiver(receiver_id, mode, frequency);
                     }
                 }
             },
-            Msg::ReceivedAudio(data) => {
-                self.handle_incoming_audio_data(data);
+            Msg::EnableAudio => {
+                match self.default_receiver() {
+                    Some(receiver) => {
+                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver.id, enable: true })
+                    },
+                    None => ()
+                }
             },
-            Msg::AudioDecoded(data) => {
-                self.play_next(&data);
+            Msg::ReceivedAudio(data) => {
+                match (self.audio_ctx(), self.gain()) {
+                    (Some(audio_ctx), Some(gain)) => {
+                        if self.audio_pos == 0 {
+                            self.audio_start_time = audio_ctx.current_time();
+                        }
+                        self.audio_pos += 1;
+
+                        let audio_pos = self.audio_pos;
+                        let start_time = self.audio_start_time;
+
+                        spawn_local(async move {
+                            let future = JsFuture::from(audio_ctx.decode_audio_data(&data.slice(5)).unwrap());
+                            match future.await {
+                                Ok(value) => {
+                                    if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
+                                        let source = audio_ctx.create_buffer_source().unwrap();
+                                        source.set_buffer(Some(&decoded));
+                                        source.connect_with_audio_node(&gain).unwrap();
+                                        source.set_loop(false);
+                                        let play_time = start_time as f64 + (audio_pos as f64 * 512.0 / 48000.0) + 0.1;
+                                        source.start_with_when(play_time).unwrap();
+                                    } else {
+                                        ConsoleService::error("decoded audio not a valid audio buffer");
+                                    }
+                                },
+                                Err(err) => {
+                                    ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
+                                }
+                            }
+                        });
+                    },
+                    _ => ()
+                }
             },
             Msg::MuteUnmute => {
                 self.toggle_mute();
@@ -86,10 +118,10 @@ impl Component for Model {
                 self.set_default_receiver(Some(receiver_id));
             },
             Msg::AddReceiver(radio_id) => {
-                self.send_command(Command::AddReceiver { ID: radio_id });
+                self.send_command(Command::AddReceiver { id: radio_id });
             },
             Msg::RemoveReceiver(receiver_id) => {
-                self.send_command(Command::RemoveReceiver{ ID: receiver_id });
+                self.send_command(Command::RemoveReceiver{ id: receiver_id });
             },
             Msg::Tick => { // self.enable_ticks(seconds)
                 /*let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
@@ -115,7 +147,7 @@ impl Component for Model {
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
                     Some(state) => {
-                        self.send_command(Command::SetRunning{ ID: radio_id, Running: !state });
+                        self.send_command(Command::SetRunning{ id: radio_id, running: !state });
                     },
                     None => {
                         ConsoleService::error(&format!("TogglePower: No radio found: {}", radio_id));
@@ -213,6 +245,7 @@ impl Component for Model {
 
                             <div class="control-bar">
                                 { self.toggle_receivers_button() }
+                                { self.enable_audio_button() }
                             </div>
 
                             <div style="clear:both"></div>
