@@ -357,7 +357,7 @@ impl Component for Model {
 
                             { self.receiver_list_control() }
 
-                            <canvas ref=self.canvas_node_ref.clone() width="2048" height="200" style="margin:10px 0;background-color: black ;" />
+                            <canvas ref=self.canvas_node_ref.clone() width="2048" height="200" style="width:100%;height:200px;margin:10px 0;background-color: black ;" />
                             <canvas ref=self.tmp_canvas_node_ref.clone() width="2048" height="200" style="display:none;background-color: black ;" />
 
                             { self.spots_view() }

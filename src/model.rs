@@ -919,7 +919,7 @@ impl Model {
                             html! {
                                 <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio )>
                                     <span class=mute_unmute_main_class>
-                                        <i class=mute_unmute_class>{ " " }</i>
+                                        <span class=mute_unmute_class>{ format!(" ") }</span>
                                     </span>
                                 </button>
                             }
