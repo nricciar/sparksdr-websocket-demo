@@ -48,6 +48,9 @@
 .control-bar {
     border:2px solid transparent !important
 }
+.main-view {
+    position: fixed;
+}
 .receiver-control {
     width: 15em
 }

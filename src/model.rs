@@ -19,8 +19,10 @@ use wasm_bindgen::JsCast;
 
 use ham_rs::Call;
 use ham_rs::countries::{CountryInfo,Country};
-use ham_rs::rig::{Receiver,Radio,Version,Command,CommandResponse,RECEIVER_MODES,Mode,Spot};
+use ham_rs::rig::{RECEIVER_MODES,Mode};
 use ham_rs::log::LogEntry;
+
+use crate::spark::{Command,CommandResponse,Receiver,Radio,Version,Spot};
 
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
 pub enum SpotFilter {
@@ -64,9 +66,13 @@ pub struct Model {
     //pub analyser: AnalyserNode,
     pub audio_pos: u64,
     pub audio_start_time: f64,
-    pub node_ref: NodeRef,
+    pub canvas_node_ref: NodeRef,
+    pub tmp_canvas_node_ref: NodeRef,
     pub canvas: Option<HtmlCanvasElement>,
+    pub tmp_canvas: Option<HtmlCanvasElement>,
     pub subscribed_audio: Option<u32>,
+    pub subscribed_spectrum: Option<u32>,
+    pub spectrum_buffer: Vec<[f32;2048]>,
 }
 
 // Currently this is unused as there is only one route: /
@@ -180,8 +186,12 @@ impl Model {
             audio_pos: 0,
             audio_start_time: 0.0,
             canvas: None,
-            node_ref: NodeRef::default(),
+            tmp_canvas: None,
+            canvas_node_ref: NodeRef::default(),
+            tmp_canvas_node_ref: NodeRef::default(),
             subscribed_audio: None,
+            subscribed_spectrum: None,
+            spectrum_buffer: Vec::new(),
         }
     }
 
@@ -206,7 +216,7 @@ impl Model {
         self.receivers = receivers;
         match self.default_receiver {
             None => {
-                self.default_receiver = Some(self.receivers[0].id);
+                self.set_default_receiver(Some(self.receivers[0].id));
             },
             _ => ()
         }
@@ -488,6 +498,33 @@ impl Model {
     }
 
     pub fn set_default_receiver(&mut self, receiver: Option<u32>) {
+        match self.subscribed_audio {
+            Some(previous_audio_channel) => {
+                self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
+                match receiver {
+                    Some(receiver_id) => {
+                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver_id, enable: true });
+                        self.subscribed_audio = Some(receiver_id);
+                    },
+                    None => (),
+                }
+            },
+            None => ()
+        }
+
+        match receiver {
+            Some(receiver_id) => {
+                match self.subscribed_spectrum {
+                    Some(previous_subscription) => {
+                        self.send_command(Command::SubscribeToSpectrum{ rx_id: previous_subscription, enable: false });
+                    },
+                    None => ()
+                }
+                self.send_command(Command::SubscribeToSpectrum{ rx_id: receiver_id, enable: true });
+                self.subscribed_spectrum = Some(receiver_id);
+            },
+            None => ()
+        }
         self.default_receiver = receiver;
     }
 
@@ -590,17 +627,12 @@ impl Model {
     }
 
     pub fn receiver_list_control(&self) -> Html {
-        match self.show_receiver_list {
-            true => {
-                html! {
-                    {
-                        for self.receivers.iter().map(|r| {
-                            self.receiver(&r)
-                        })
-                    }
-                }
-            },
-            false => html! {}
+        html! {
+            {
+                for self.receivers.iter().map(|r| {
+                    self.receiver(&r)
+                })
+            }
         }
     }
 
@@ -815,7 +847,11 @@ impl Model {
         let receiver_id = receiver.id;
         let (class_name, is_default) = 
             if Some(receiver.id) == self.default_receiver {
-                ("receiver-control selected", true)
+                if !self.show_receiver_list {
+                    ("receiver-control selected main-view", true)
+                } else {
+                    ("receiver-control selected", true)
+                }
             } else {
                 ("receiver-control", false)
             };
@@ -825,6 +861,7 @@ impl Model {
                 _ => "fas fa-volume-up"
             };
 
+        if self.show_receiver_list || is_default {
         html! {
             <div class=class_name onclick=self.link.callback(move |_| Msg::SetDefaultReceiver(receiver_id))>
                 <div class="up-controls">
@@ -889,6 +926,9 @@ impl Model {
                     </select>
                 </div>
             </div>
+        }
+        } else {
+            html! {}
         }
     }
 

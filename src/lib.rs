@@ -1,4 +1,7 @@
 #![recursion_limit = "2048"]
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
 use wasm_bindgen::prelude::*;
 use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
 use yew::{events::KeyboardEvent};
@@ -8,11 +11,16 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d,AudioBuffer};
 use wasm_bindgen_futures::{spawn_local};
-
-use ham_rs::rig::{Command,CommandResponse};
+use js_sys::{DataView,Float32Array};
 
 mod model;
 use model::{Model,Msg,SpotFilter};
+
+mod spark;
+use spark::{Command,CommandResponse};
+
+mod color;
+use color::{ColourGradient};
 
 impl Component for Model {
     type Message = Msg;
@@ -81,38 +89,107 @@ impl Component for Model {
                 true
             },
             Msg::ReceivedAudio(data) => {
-                match (self.audio_ctx(), self.gain()) {
-                    (Some(audio_ctx), Some(gain)) => {
-                        if self.audio_pos == 0 {
-                            self.audio_start_time = audio_ctx.current_time();
-                        }
-                        self.audio_pos += 1;
+                let view = DataView::new(&data, 0, data.byte_length() as usize);
+                let data_type = view.get_uint8(0);
 
-                        let audio_pos = self.audio_pos;
-                        let start_time = self.audio_start_time;
-
-                        spawn_local(async move {
-                            let future = JsFuture::from(audio_ctx.decode_audio_data(&data.slice(5)).unwrap());
-                            match future.await {
-                                Ok(value) => {
-                                    if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
-                                        let source = audio_ctx.create_buffer_source().unwrap();
-                                        source.set_buffer(Some(&decoded));
-                                        source.connect_with_audio_node(&gain).unwrap();
-                                        source.set_loop(false);
-                                        let play_time = start_time as f64 + (audio_pos as f64 * 512.0 / 48000.0) + 0.1;
-                                        source.start_with_when(play_time).unwrap();
-                                    } else {
-                                        ConsoleService::error("decoded audio not a valid audio buffer");
-                                    }
-                                },
-                                Err(err) => {
-                                    ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
+                match data_type {
+                    1 => {
+                        match (self.audio_ctx(), self.gain()) {
+                            (Some(audio_ctx), Some(gain)) => {
+                                if self.audio_pos == 0 {
+                                    self.audio_start_time = audio_ctx.current_time();
                                 }
-                            }
-                        });
+                                self.audio_pos += 1;
+
+                                let audio_pos = self.audio_pos;
+                                let start_time = self.audio_start_time;
+
+                                spawn_local(async move {
+                                    let future = JsFuture::from(audio_ctx.decode_audio_data(&data.slice(5)).unwrap());
+                                    match future.await {
+                                        Ok(value) => {
+                                            if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
+                                                let source = audio_ctx.create_buffer_source().unwrap();
+                                                source.set_buffer(Some(&decoded));
+                                                source.connect_with_audio_node(&gain).unwrap();
+                                                source.set_loop(false);
+                                                let play_time = start_time as f64 + (audio_pos as f64 * 512.0 / 48000.0) + 0.1;
+                                                source.start_with_when(play_time).unwrap();
+                                            } else {
+                                                ConsoleService::error("decoded audio not a valid audio buffer");
+                                            }
+                                        },
+                                        Err(err) => {
+                                            ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
+                                        }
+                                    }
+                                });
+                            },
+                            _ => ()
+                        }
                     },
-                    _ => ()
+                    2 => {
+                        let receiver_id = view.get_uint32(1);
+                        //let freq_start = view.get_float64(5);
+                        //let freq_stop = view.get_float64(13);
+                        if let Some(subscribed_spectrum) = self.subscribed_spectrum {
+                            if subscribed_spectrum == receiver_id {
+                                let data = Float32Array::new(&data.slice(1+4+8+8));
+                                let mut tmp = [0.0; 2048];
+                                data.copy_to(&mut tmp);
+                                self.spectrum_buffer.push(tmp);
+                            }
+                        }
+
+                        match (self.spectrum_buffer.len(), &self.canvas, &self.tmp_canvas) {
+                            (buffer_len, Some(canvas), Some(tmp_canvas)) if buffer_len >= 10 => {
+                                let canvas = canvas.clone();
+                                let tmp_canvas = tmp_canvas.clone();
+                                let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
+                                let tmp_ctx = tmp_canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
+
+                                    tmp_ctx.draw_image_with_html_canvas_element_and_dw_and_dh(&canvas, 0.0, 0.0, 2048.0, 200.0).unwrap();
+
+                                    let mut avg_array = [0.0;2048];
+                                    for i in 0..2047 {
+                                        let mut max = self.spectrum_buffer.iter().max_by_key(|b| b[i] as u32 ).unwrap()[i] + 180.0;
+                                        if max > 255.0 {
+                                            max = 255.0;
+                                        }
+                                        if max < 0.0 {
+                                            max = 0.0;
+                                        }
+                                        avg_array[i] = max;
+                                    }
+
+                                    let mut gradient = ColourGradient::new();
+                                    gradient.set_max(255.0);
+                                    gradient.set_min(0.0);
+
+                                    for (i,v) in avg_array.iter().enumerate() {
+                                        let color = gradient.get_colour(*v);
+                                        ctx.set_fill_style(&format!("rgb({},{},{})", color.r, color.g, color.b).into());
+                                        ctx.fill_rect(i as f64, 0 as f64, 1 as f64, 1 as f64);
+                                    }
+
+                                    ctx.translate(0 as f64,1 as f64).unwrap();
+
+                                    ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(&tmp_canvas, 0.0, 0.0, 2048.0, 200.0, 0.0, 0.0, 2048.0, 200.0).unwrap();
+
+                                    ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).unwrap();
+
+                                    self.spectrum_buffer = Vec::new();
+                            },
+                            (_, None, _) |
+                            (_, _, None) => {
+                                ConsoleService::error("unable to find canvas");
+                            },
+                            _ => ()
+                        }
+                    },
+                    dt => {
+                        ConsoleService::error(&format!("unsupported data type: {}", dt));
+                    }
                 }
                 false
             },
@@ -133,14 +210,6 @@ impl Component for Model {
                 false
             },
             Msg::SetDefaultReceiver(receiver_id) => {
-                match self.subscribed_audio {
-                    Some(previous_audio_channel) => {
-                        self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
-                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver_id, enable: true });
-                        self.subscribed_audio = Some(receiver_id);
-                    },
-                    None => ()
-                }
                 self.set_default_receiver(Some(receiver_id));
                 true
             },
@@ -153,25 +222,6 @@ impl Component for Model {
                 false
             },
             Msg::Tick => { // self.enable_ticks(seconds)
-                /*let mut data = vec![0; self.analyser.frequency_bin_count() as usize];
-                self.analyser.get_byte_frequency_data(&mut data);
-                self.console.log(&format!("{:?}", data));
-
-                match &self.canvas {
-                    Some(canvas) => {
-                        self.console.log(&format!("found canvas: {:?}", canvas));
-                        let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
-                        for (i,d) in data.iter().enumerate() {
-                            ctx.set_fill_style(&format!("rgb({}, 10, 10)", d).into());
-                            ctx.fill_rect(i as f64, 0 as f64, 1 as f64, 1 as f64);
-                        }
-                        ctx.translate(0 as f64,1 as f64).unwrap();
-                        ctx.set_transform(1 as f64, 0 as f64, 0 as f64, 1 as f64, 0 as f64, 0 as f64).unwrap();
-                    },
-                    None => {
-                        self.console.log("unable to find canvas");
-                    }
-                }*/
                 true
             },
             Msg::TogglePower(radio_id) => {
@@ -271,8 +321,11 @@ impl Component for Model {
     }
 
     fn rendered(&mut self, first_render: bool) {
-        let canvas = self.node_ref.cast::<HtmlCanvasElement>().unwrap();
+        let canvas = self.canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
         self.canvas = Some(canvas);
+
+        let tmp_canvas = self.tmp_canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
+        self.tmp_canvas = Some(tmp_canvas);
 
         if first_render {
             self.initialize_audio();
@@ -297,8 +350,8 @@ impl Component for Model {
 
                             { self.receiver_list_control() }
 
-                            <div style="clear:both"></div>
-                            <canvas ref=self.node_ref.clone() width="512" height="300" style="display: none; background-color: black ;" />
+                            <canvas ref=self.canvas_node_ref.clone() width="2048" height="200" style="margin:10px 0;background-color: black ;" />
+                            <canvas ref=self.tmp_canvas_node_ref.clone() width="2048" height="200" style="display:none;background-color: black ;" />
 
                             { self.spots_view() }
                         </>
