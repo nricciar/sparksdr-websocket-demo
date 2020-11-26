@@ -55,7 +55,13 @@ impl Component for Model {
                     CommandResponse::Spots { spots } => {
                         let cq_only = self.cq_only();
                         for spot in spots {
-                            if (cq_only && spot.msg.contains("CQ")) || !cq_only {
+                            let is_cq =
+                                if let Some(msg) = &spot.msg {
+                                    if msg.contains("CQ") { true } else { false }
+                                } else {
+                                    false
+                                };
+                            if (cq_only && is_cq) || !cq_only {
                                 self.add_spot(spot);
                             }
                         }
@@ -73,6 +79,8 @@ impl Component for Model {
                     Some(audio_channel) => {
                         self.send_command(Command::SubscribeToAudio{ rx_id: audio_channel, enable: false });
                         self.subscribed_audio = None;
+                        self.audio_pos = 0;
+                        self.audio_start_time = 0.0;
                         ConsoleService::log("unsubscribed to audio");
                     },
                     None => {
@@ -91,9 +99,10 @@ impl Component for Model {
             Msg::ReceivedAudio(data) => {
                 let view = DataView::new(&data, 0, data.byte_length() as usize);
                 let data_type = view.get_uint8(0);
+                let receiver_id = view.get_int32(1);
 
-                match data_type {
-                    1 => {
+                match (data_type, self.subscribed_audio, self.subscribed_spectrum) {
+                    (1, Some(subscribed_audio), _) => {
                         match (self.audio_ctx(), self.gain()) {
                             (Some(audio_ctx), Some(gain)) => {
                                 if self.audio_pos == 0 {
@@ -128,18 +137,13 @@ impl Component for Model {
                             _ => ()
                         }
                     },
-                    2 => {
-                        let receiver_id = view.get_uint32(1);
+                    (2, _, Some(subscribed_spectrum)) if subscribed_spectrum == (receiver_id as u32) => {
                         //let freq_start = view.get_float64(5);
                         //let freq_stop = view.get_float64(13);
-                        if let Some(subscribed_spectrum) = self.subscribed_spectrum {
-                            if subscribed_spectrum == receiver_id {
-                                let data = Float32Array::new(&data.slice(1+4+8+8));
-                                let mut tmp = [0.0; 2048];
-                                data.copy_to(&mut tmp);
-                                self.spectrum_buffer.push(tmp);
-                            }
-                        }
+                        let data = Float32Array::new(&data.slice(1+4+8+8));
+                        let mut tmp = [0.0; 2048];
+                        data.copy_to(&mut tmp);
+                        self.spectrum_buffer.push(tmp);
 
                         match (self.spectrum_buffer.len(), &self.canvas, &self.tmp_canvas) {
                             (buffer_len, Some(canvas), Some(tmp_canvas)) if buffer_len >= 10 => {
@@ -187,7 +191,11 @@ impl Component for Model {
                             _ => ()
                         }
                     },
-                    dt => {
+                    (2, _, Some(_)) => (),
+                    (_, None, None) => {
+                        ConsoleService::error("receiving binary data but not subscribed to anything");
+                    },
+                    (dt, _, _) => {
                         ConsoleService::error(&format!("unsupported data type: {}", dt));
                     }
                 }
@@ -343,7 +351,6 @@ impl Component for Model {
 
                             <div class="control-bar">
                                 { self.toggle_receivers_button() }
-                                { self.enable_audio_button() }
                             </div>
 
                             <div style="clear:both"></div>

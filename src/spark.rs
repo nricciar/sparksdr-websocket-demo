@@ -43,7 +43,7 @@ pub struct Spot {
     pub drift: i32,
     pub snr: i32,
     pub dt: f32,
-    pub msg: String,
+    pub msg: Option<String>,
     pub mode: Mode,
     pub distance: Option<f32>,
     #[serde(deserialize_with = "callsign_as_string")]

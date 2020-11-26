@@ -796,9 +796,13 @@ impl Model {
                       }
                     }</td>
                 {
-                    match spot.msg.contains("CQ") {
-                        true => html! { <th>{ spot.msg.to_string() }</th> },
-                        false => html! { <td>{ spot.msg.to_string() }</td> }
+                    if let Some(msg) = &spot.msg {
+                        match msg.contains("CQ") {
+                            true => html! { <th>{ msg.to_string() }</th> },
+                            false => html! { <td>{ msg.to_string() }</td> }
+                        }
+                    } else {
+                        html! { <td>{ "--" }</td> }
                     }
                 }
                 <td>{ country_icon }</td>
@@ -856,9 +860,14 @@ impl Model {
                 ("receiver-control", false)
             };
         let mute_unmute_class =
-            match &self.gain {
-                Some(gain) if gain.gain().value() == 0.0 => "fas fa-volume-mute",
-                _ => "fas fa-volume-up"
+            match self.subscribed_audio {
+                Some(_) => "fas fa-volume-up",
+                _ => "fas fa-volume-mute"
+            };
+        let mute_unmute_main_class =
+            match self.subscribed_audio {
+                Some(_) => "icon is-small",
+                None => "icon is-small has-text-danger",
             };
 
         if self.show_receiver_list || is_default {
@@ -893,15 +902,23 @@ impl Model {
                     }
                 </div>
                 <div class="mode control" style="margin-top:-0.5em;z-index:50">
-                    <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::RemoveReceiver(receiver_id))>
-                        <span class="icon is-small">
-                        <i class="far fa-trash-alt"></i>
-                        </span>
-                    </button>
+                    {
+                        if self.show_receiver_list {
+                            html! {
+                                <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::RemoveReceiver(receiver_id))>
+                                    <span class="icon is-small">
+                                    <i class="far fa-trash-alt"></i>
+                                    </span>
+                                </button>
+                            }
+                        } else {
+                            html! {}
+                        }
+                    }
                     { if is_default {
                             html! {
-                                <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::MuteUnmute )>
-                                    <span class="icon is-small">
+                                <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio )>
+                                    <span class=mute_unmute_main_class>
                                         <i class=mute_unmute_class>{ " " }</i>
                                     </span>
                                 </button>

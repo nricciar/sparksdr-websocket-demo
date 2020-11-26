@@ -50,6 +50,7 @@
 }
 .main-view {
     position: fixed;
+    margin-top: 20px !important;
 }
 .receiver-control {
     width: 15em
