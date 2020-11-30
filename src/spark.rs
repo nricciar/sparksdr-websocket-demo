@@ -1,7 +1,6 @@
-use serde::{Deserialize, Deserializer};
-use ham_rs::{Call,Grid};
+use serde::{Deserialize};
 use ham_rs::rig::{Mode};
-use chrono::prelude::*;
+use crate::spot::Spot;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Receiver {
@@ -11,6 +10,15 @@ pub struct Receiver {
     pub mode: Mode,
     #[serde(rename = "Frequency")] 
     pub frequency: f32,
+}
+
+impl Receiver {
+    pub fn has_spots(&self) -> bool {
+        match self.mode {
+            Mode::FT8 | Mode::FT4 | Mode::JT65 | Mode::JT9 | Mode::WSPR => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,33 +39,6 @@ pub struct Version {
     pub host: String,
     #[serde(rename = "HostVersion")]
     pub host_version: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Spot {
-    pub time: DateTime<Utc>,
-    pub frequency: f32,
-    #[serde(rename = "tunedfrequency")]
-    pub tuned_frequency: f32,
-    pub power: i32,
-    pub drift: i32,
-    pub snr: i32,
-    pub dt: f32,
-    pub msg: Option<String>,
-    pub mode: Mode,
-    pub distance: Option<f32>,
-    #[serde(deserialize_with = "callsign_as_string")]
-    pub call: Call,
-    pub color: i32,
-    pub locator: Option<Grid>,
-    pub valid: bool
-}
-
-pub fn callsign_as_string<'de, D>(deserializer: D) -> Result<Call, D::Error>
-    where D: Deserializer<'de>
-{
-    let v : String = Deserialize::deserialize(deserializer)?;
-    Ok(Call::new(v))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

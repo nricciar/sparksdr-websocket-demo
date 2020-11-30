@@ -1,13 +1,17 @@
+#map { margin-top: 10px }
 .container .title { margin-top: 2em }
 .ws-connection { width:30em;margin-bottom:8em;padding-top:10px }
 .ws-connection input { margin-right:0.5em }
-.new-country,.new-state {
-    color: green;
+.import .file-import {
+    width:120px;
 }
-.import {
-    padding:10px;
-    margin:10px;
+.filter-currentrx .modec {
+    display:none
 }
+.filter-currentrx .freqc span {
+    display:none
+}
+
 .flag-icon {
     background-size: contain;
     background-position: 50%;
@@ -16,9 +20,11 @@
     height: 16px;
     margin-right:5px;
 }
+.navbar-item .icon {
+    margin-left:5px;
+}
 .s { 
-    padding:10px;
-    margin:10px;
+    margin-top:10px;
     max-height: 500px;
     overflow: auto;
 }
@@ -27,6 +33,7 @@
     padding: 0 10px;
 }
 .copy {
+    clear:both;
     padding: 10px;
     margin: 10px;
     border-top: 1px solid #555;
@@ -39,24 +46,29 @@
     margin-left: 5px;
 }
 .receiver-control, .radio-control, .control-bar {
+    user-select: none;
     border:2px solid #555;
     padding:10px;
     margin:10px;
     float:left;
     border-radius:3px;
 }
+.spot-filters {
+    clear:left;
+    border:none !important;
+    margin:0 0 0 10px !important;
+    padding:0 !important;
+}
 .control-bar {
     border:2px solid transparent !important
 }
 .main-view {
-    position: fixed;
-    margin-top: 20px !important;
+    height:110px;
+    border:none !important;
+    /*position: fixed;*/
 }
 .receiver-control {
     width: 15em
-}
-div.selected {
-    background-color: #ebebeb;
 }
 .receiver-control .frequency, .receiver-control .up-controls,.receiver-control .down-controls {
     font-family: "Courier New", Courier, monospace !important;

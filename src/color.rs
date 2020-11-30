@@ -30,10 +30,6 @@ impl RGBAColour {
   pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
     Self { r, g, b, a }
   }
-
-  pub fn to_vec(&self) -> Vec<u8> {
-    vec![self.r, self.g, self.b, self.a]
-  }
 }
 
 /// ColourGradient allows you to create custom colour gradients for each
@@ -99,10 +95,6 @@ impl ColourGradient {
       b: self.interpolate(first.b, second.b, ratio),
       a: 255,
     }
-  }
-
-  pub fn add_colour(&mut self, colour: RGBAColour) {
-    self.colours.push(colour);
   }
 
   fn interpolate(&self, start: u8, finish: u8, ratio: f32) -> u8 {

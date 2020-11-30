@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "ham-rs"
 version = "0.1.0"
-source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#c45ed9b88e210ef73b183a2bfbd81e3a1dcc370f"
+source = "git+https://github.com/nricciar/ham-rs?branch=pre-release#c02fb793626a15e72d358f414f6f33010056ce70"
 dependencies = [
  "adif",
  "chrono",
@@ -604,9 +604,9 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "syn"
-version = "1.0.51"
+version = "1.0.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4f34193997d92804d359ed09953e25d5138df6bcc055a71bf68ee89fdf9223"
+checksum = "6c1e438504729046a5cfae47f97c30d6d083c7d91d94603efdae3477fc070d4c"
 dependencies = [
  "proc-macro2",
  "quote",

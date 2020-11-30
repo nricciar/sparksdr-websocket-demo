@@ -6,21 +6,23 @@ use wasm_bindgen::prelude::*;
 use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
 use yew::{events::KeyboardEvent};
 use yew::services::{ConsoleService};
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlCanvasElement,CanvasRenderingContext2d,AudioBuffer};
-use wasm_bindgen_futures::{spawn_local};
-use js_sys::{DataView,Float32Array};
+use yew_router::{route::Route, service::RouteService};
+use yew_router::{Switch};
+use web_sys::{HtmlCanvasElement};
+use js_sys::{DataView};
+
+use ham_rs::lotw::LoTWStatus;
 
 mod model;
-use model::{Model,Msg,SpotFilter};
-
 mod spark;
-use spark::{Command,CommandResponse};
-
 mod color;
-use color::{ColourGradient};
+mod spot;
+mod audio;
+mod spectrum;
+
+use model::{Model,Msg,AppRoute};
+use spark::{Command,CommandResponse};
+use spot::{SpotFilter};
 
 impl Component for Model {
     type Message = Msg;
@@ -35,6 +37,11 @@ impl Component for Model {
                 self.send_command(Command::GetVersion);
                 // Also subscribe to spots
                 self.send_command(Command::SubscribeToSpots{ enable: true });
+
+                // fetch the lotw users file
+                if !self.spots.has_lotw_users() {
+                    self.spots.fetch_lotw_users(&self.link);
+                }
                 false
             },
             Msg::CommandResponse(Ok(msg)) => {
@@ -53,19 +60,23 @@ impl Component for Model {
                     },
                     // spotResponse: new incoming spots
                     CommandResponse::Spots { spots } => {
-                        let cq_only = self.cq_only();
+                        let cq_only = self.spots.cq_only_spot_filter_enabled();
                         for spot in spots {
-                            let is_cq =
-                                if let Some(msg) = &spot.msg {
-                                    if msg.contains("CQ") { true } else { false }
-                                } else {
-                                    false
-                                };
-                            if (cq_only && is_cq) || !cq_only {
-                                self.add_spot(spot);
+                            if (cq_only && spot.is_cq()) || !cq_only {
+                                let current_rx_pass =
+                                    match self.default_receiver() {
+                                        Some(receiver) if self.spots.current_receiver_spot_filter_enabled() && receiver.has_spots() => {
+                                            if spot.current_rx(&receiver) { true } else { false }
+                                        },
+                                        _ => true,
+                                    };
+
+                                if current_rx_pass {
+                                    self.spots.add_spot(&self.link, spot, &self.import);
+                                }
                             }
                         }
-                        self.trim_spots(100);
+                        self.spots.trim_spots(100);
                     },
                     // ReceiverResponse: receiver updates (mode/frequency)
                     CommandResponse::ReceiverResponse{ id: receiver_id, frequency, mode } => {
@@ -75,23 +86,12 @@ impl Component for Model {
                 true
             },
             Msg::EnableAudio => {
-                match self.subscribed_audio {
-                    Some(audio_channel) => {
-                        self.send_command(Command::SubscribeToAudio{ rx_id: audio_channel, enable: false });
-                        self.subscribed_audio = None;
-                        self.audio_pos = 0;
-                        self.audio_start_time = 0.0;
-                        ConsoleService::log("unsubscribed to audio");
+                match self.audio.receiving_audio() {
+                    Some(_) => {
+                        self.unsubscribe_to_audio();
                     },
                     None => {
-                        match self.default_receiver() {
-                            Some(receiver) => {
-                                self.send_command(Command::SubscribeToAudio{ rx_id: receiver.id, enable: true });
-                                self.subscribed_audio = Some(receiver.id);
-                                ConsoleService::log(&format!("subscribed to audio channel: {}", receiver.id));
-                            },
-                            None => ()
-                        }
+                        self.subscribe_to_audio();
                     }
                 }
                 true
@@ -101,95 +101,14 @@ impl Component for Model {
                 let data_type = view.get_uint8(0);
                 let receiver_id = view.get_int32(1);
 
-                match (data_type, self.subscribed_audio, self.subscribed_spectrum) {
-                    (1, Some(subscribed_audio), _) => {
-                        match (self.audio_ctx(), self.gain()) {
-                            (Some(audio_ctx), Some(gain)) => {
-                                if self.audio_pos == 0 {
-                                    self.audio_start_time = audio_ctx.current_time();
-                                }
-                                self.audio_pos += 1;
-
-                                let audio_pos = self.audio_pos;
-                                let start_time = self.audio_start_time;
-
-                                spawn_local(async move {
-                                    let future = JsFuture::from(audio_ctx.decode_audio_data(&data.slice(5)).unwrap());
-                                    match future.await {
-                                        Ok(value) => {
-                                            if let Ok(decoded) = value.dyn_into::<AudioBuffer>() {
-                                                let source = audio_ctx.create_buffer_source().unwrap();
-                                                source.set_buffer(Some(&decoded));
-                                                source.connect_with_audio_node(&gain).unwrap();
-                                                source.set_loop(false);
-                                                let play_time = start_time as f64 + (audio_pos as f64 * 512.0 / 48000.0) + 0.1;
-                                                source.start_with_when(play_time).unwrap();
-                                            } else {
-                                                ConsoleService::error("decoded audio not a valid audio buffer");
-                                            }
-                                        },
-                                        Err(err) => {
-                                            ConsoleService::error(&format!("unable to decode audio data: {:?}", err));
-                                        }
-                                    }
-                                });
-                            },
-                            _ => ()
-                        }
+                match (data_type, self.audio.receiving_audio(), self.spectrum.receiving_spectrum()) {
+                    (1, Some(_), _) => {
+                        self.audio.import_audio_data(data);
                     },
                     (2, _, Some(subscribed_spectrum)) if subscribed_spectrum == (receiver_id as u32) => {
-                        //let freq_start = view.get_float64(5);
-                        //let freq_stop = view.get_float64(13);
-                        let data = Float32Array::new(&data.slice(1+4+8+8));
-                        let mut tmp = [0.0; 2048];
-                        data.copy_to(&mut tmp);
-                        self.spectrum_buffer.push(tmp);
-
-                        match (self.spectrum_buffer.len(), &self.canvas, &self.tmp_canvas) {
-                            (buffer_len, Some(canvas), Some(tmp_canvas)) if buffer_len >= 10 => {
-                                let canvas = canvas.clone();
-                                let tmp_canvas = tmp_canvas.clone();
-                                let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
-                                let tmp_ctx = tmp_canvas.get_context("2d").unwrap().unwrap().dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
-
-                                    tmp_ctx.draw_image_with_html_canvas_element_and_dw_and_dh(&canvas, 0.0, 0.0, 2048.0, 200.0).unwrap();
-
-                                    let mut avg_array = [0.0;2048];
-                                    for i in 0..2047 {
-                                        let mut max = self.spectrum_buffer.iter().max_by_key(|b| b[i] as u32 ).unwrap()[i] + 180.0;
-                                        if max > 255.0 {
-                                            max = 255.0;
-                                        }
-                                        if max < 0.0 {
-                                            max = 0.0;
-                                        }
-                                        avg_array[i] = max;
-                                    }
-
-                                    let mut gradient = ColourGradient::new();
-                                    gradient.set_max(255.0);
-                                    gradient.set_min(0.0);
-
-                                    for (i,v) in avg_array.iter().enumerate() {
-                                        let color = gradient.get_colour(*v);
-                                        ctx.set_fill_style(&format!("rgb({},{},{})", color.r, color.g, color.b).into());
-                                        ctx.fill_rect(i as f64, 0 as f64, 1 as f64, 1 as f64);
-                                    }
-
-                                    ctx.translate(0 as f64,1 as f64).unwrap();
-
-                                    ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(&tmp_canvas, 0.0, 0.0, 2048.0, 200.0, 0.0, 0.0, 2048.0, 200.0).unwrap();
-
-                                    ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).unwrap();
-
-                                    self.spectrum_buffer = Vec::new();
-                            },
-                            (_, None, _) |
-                            (_, _, None) => {
-                                ConsoleService::error("unable to find canvas");
-                            },
-                            _ => ()
-                        }
+                        let freq_start = view.get_float64_endian(5, true).floor();
+                        let freq_stop = view.get_float64_endian(13, true).floor();
+                        self.spectrum.import_spectrum_data(data, freq_start, freq_stop);
                     },
                     (2, _, Some(_)) => (),
                     (_, None, None) => {
@@ -202,7 +121,7 @@ impl Component for Model {
                 false
             },
             Msg::MuteUnmute => {
-                self.toggle_mute();
+                self.audio.toggle_mute();
                 true
             },
             Msg::CommandResponse(Err(err)) => {
@@ -210,12 +129,25 @@ impl Component for Model {
                 false
             },
             Msg::CallsignInfoReady(Ok(call)) => {
-                self.cache_callsign_info(call);
+                // FIXME: json serialization issue
+                let mut call = call;
+                match call.lotw() {
+                    LoTWStatus::Unknown => {
+                        call.set_lotw(LoTWStatus::Unregistered);
+                    },
+                    _ => ()
+                }
+
+                self.spots.cache_callsign_info(call, &self.import);
                 true
             },
             Msg::CallsignInfoReady(Err(err)) => {
                 ConsoleService::error(&format!("callsign info error: {}", err));
                 false
+            },
+            Msg::ClearSpots => {
+                self.spots.clear_spots();
+                true
             },
             Msg::SetDefaultReceiver(receiver_id) => {
                 self.set_default_receiver(Some(receiver_id));
@@ -228,9 +160,6 @@ impl Component for Model {
             Msg::RemoveReceiver(receiver_id) => {
                 self.send_command(Command::RemoveReceiver{ id: receiver_id });
                 false
-            },
-            Msg::Tick => { // self.enable_ticks(seconds)
-                true
             },
             Msg::TogglePower(radio_id) => {
                 match self.get_radio_power_state(radio_id) {
@@ -275,7 +204,7 @@ impl Component for Model {
                 true
             },
             Msg::SetGain(gain) => {
-                self.set_gain(gain);
+                self.audio.set_gain(gain);
                 true
             },
             Msg::RouteChanged(route) => {
@@ -305,10 +234,43 @@ impl Component for Model {
                 }
                 true
             },
+            Msg::LotwUsers(users) => {
+                ConsoleService::log("lotw users imported");
+                self.spots.import_lotw_users(users);
+                true
+            },
             Msg::ToggleCQSpotFilter => {
-                match self.cq_only() {
-                    true => self.remove_filter(SpotFilter::CQOnly).unwrap(),
-                    false => self.add_filter(SpotFilter::CQOnly),
+                match self.spots.cq_only_spot_filter_enabled() {
+                    true => self.spots.remove_filter(SpotFilter::CQOnly).unwrap(),
+                    false => self.spots.add_filter(SpotFilter::CQOnly),
+                }
+                true
+            },
+            Msg::ToggleCountrySpotFilter => {
+                match self.spots.country_spot_filter_enabled() {
+                    true => self.spots.remove_filter(SpotFilter::NewCountry).unwrap(),
+                    false => self.spots.add_filter(SpotFilter::NewCountry),
+                }
+                true
+            },
+            Msg::ToggleStateSpotFilter => {
+                match self.spots.state_spot_filter_enabled() {
+                    true => self.spots.remove_filter(SpotFilter::NewState).unwrap(),
+                    false => self.spots.add_filter(SpotFilter::NewState),
+                }
+                true
+            },
+            Msg::ToggleCurrentReceiverSpotFilter => {
+                match self.spots.current_receiver_spot_filter_enabled() {
+                    true => self.spots.remove_filter(SpotFilter::CurrentReceiver).unwrap(),
+                    false => self.spots.add_filter(SpotFilter::CurrentReceiver),
+                }
+                true
+            },
+            Msg::ToggleLoTWSpotFilter => {
+                match self.spots.lotw_spot_filter_enabled() {
+                    true => self.spots.remove_filter(SpotFilter::LoTW).unwrap(),
+                    false => self.spots.add_filter(SpotFilter::LoTW),
                 }
                 true
             }
@@ -319,8 +281,6 @@ impl Component for Model {
     fn create(_props: Self::Properties, link: ComponentLink<Self>) -> Self {
         let mut model = Model::new(link);
         model.connect("ws://localhost:4649/Spark");
-        // emit Msg::Tick every 10 seconds
-        //model.enable_ticks(1);
         model
     }
 
@@ -329,67 +289,78 @@ impl Component for Model {
     }
 
     fn rendered(&mut self, first_render: bool) {
-        let canvas = self.canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
-        self.canvas = Some(canvas);
+        let canvas = self.spectrum.canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
+        self.spectrum.canvas = Some(canvas);
 
-        let tmp_canvas = self.tmp_canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
-        self.tmp_canvas = Some(tmp_canvas);
+        let tmp_canvas = self.spectrum.tmp_canvas_node_ref.cast::<HtmlCanvasElement>().unwrap();
+        self.spectrum.tmp_canvas = Some(tmp_canvas);
 
         if first_render {
-            self.initialize_audio();
+            self.audio.create_audio_context();
+            js_sys::eval("mapView = L.map('map').setView([0.0, 0.0], 2);").unwrap();
+            let tile_layer_js = "L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token=pk.eyJ1Ijoia2s0d2pzIiwiYSI6ImNraTFnY28xNDAwZ3Ayd3BhcGs1aTF2MzUifQ.HKwoDr52uGnmnllpgESJIg', {
+    attribution: 'Map data &copy; <a href=\"https://www.openstreetmap.org/\">OpenStreetMap</a> contributors, <a href=\"https://creativecommons.org/licenses/by-sa/2.0/\">CC-BY-SA</a>, Imagery © <a href=\"https://www.mapbox.com/\">Mapbox</a>',
+    maxZoom: 18,
+    id: 'mapbox/light-v10',
+    tileSize: 512,
+    zoomOffset: -1,
+    accessToken: 'your.mapbox.access.token'
+}).addTo(mapView);";
+            js_sys::eval(tile_layer_js).unwrap();
         }
     }
 
     fn view(&self) -> Html {
-        html! {
-            <>
-            {
-                if self.is_connected() {
-                    html! {
-                        <>
-                            { self.radio_list_control() }
+        let (is_index, spectrum_style, map_stype) =
+            match AppRoute::switch(self.route.clone()) {
+                Some(AppRoute::Index) | None => (true, "", "height:0px;overflow:hidden"),
+                _ => (false, "height:120px;overflow:hidden", ""),
+            };
 
-                            <div class="control-bar">
-                                { self.toggle_receivers_button() }
+        match self.is_connected() {
+            false => self.disconnected_view(),
+            true => {
+                html! {
+                    <>
+                        { self.navbar_view() }
+
+                        <div style="clear:both"></div>
+
+                        { self.receiver_list_control() }
+                        { self.spot_filters_sidebar() }
+
+                        <div style="margin-left:15em;padding:0 10px 0 20px">
+                            <div style=spectrum_style>
+                                <canvas ref=self.spectrum.canvas_node_ref.clone() width="2048" height="200" style="width:100%;height:200px;margin-top:10px;background-color: black ;" />
                             </div>
-
-                            <div style="clear:both"></div>
-
-                            { self.receiver_list_control() }
-
-                            <canvas ref=self.canvas_node_ref.clone() width="2048" height="200" style="width:100%;height:200px;margin:10px 0;background-color: black ;" />
-                            <canvas ref=self.tmp_canvas_node_ref.clone() width="2048" height="200" style="display:none;background-color: black ;" />
-
-                            { self.spots_view() }
-                        </>
-                    }
-                } else {
-                    html! {
-                        <div class="container">
-                            <h1 class="title">{ "Disconnected" }</h1>
-                            <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
-                            <div class="field is-grouped ws-connection">
-                            <input class="input"
-                                value=&self.ws_location
-                                oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
-                                onkeypress=self.link.callback(|e: KeyboardEvent| {
-                                    if e.key() == "Enter" { Msg::Connect } else { Msg::None }
-                                }) />
-                            <button class="button is-link" onclick=self.link.callback(move |_| Msg::Connect )>
-                                { "Connect" }
-                            </button>
+                            {
+                                if is_index {
+                                    html! {
+                                        <>
+                                            <table style="width:100%;border-left:2px solid #555;border-right:2px solid #555">
+                                                <tr>
+                                                    <th style="padding-left:10px">{ self.spectrum.freq_start() }</th>
+                                                    <th style="text-align:right;padding-right:10px">{ self.spectrum.freq_stop() }</th>
+                                                </tr>
+                                            </table>
+                                            { self.spots_view() }
+                                        </>
+                                    }
+                                } else {
+                                    html! { }
+                                }
+                            }
+                            <div style=map_stype>
+                                <div id="map" style="width:100%;height:600px" class="has-background-light"> </div>
                             </div>
                         </div>
-                    }
+
+                        <canvas ref=self.spectrum.tmp_canvas_node_ref.clone() width="2048" height="200" style="display:none;background-color: black ;" />
+
+                        { self.footer_view() }
+                    </>
                 }
             }
-            <div class="copy">
-                <div class=if self.is_connected() { "" } else { "container" }>
-                    { self.version_html() }
-                    <p><a href="https://github.com/nricciar/sparksdr-websocket-demo" target="_blank">{ "sparksdr-websocket-demo @ github" }</a></p>
-                </div>
-            </div>
-            </>
         }
     }
 }

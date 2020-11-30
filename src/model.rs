@@ -1,83 +1,68 @@
 use anyhow::Error;
 use yew::prelude::*;
-use yew::services::{ConsoleService,Task};
+use yew::services::{ConsoleService};
 use yew::{html, ComponentLink, Html};
 use yew_router::{route::Route, service::RouteService};
 use yew_router::{Switch};
-use yew::format::{Json,Nothing};
-use yew::services::fetch::{FetchTask};
-use yew::services::interval::{IntervalService};
+use yew::format::{Json};
 use yew::services::reader::{File, FileData, ReaderService, ReaderTask};
 use yew::services::websocket::{WebSocketStatus};
-use yew::services::fetch::{FetchService, Request, Response};
+use yew::services::storage::{Area, StorageService};
 use web_sys::{WebSocket,BinaryType,MessageEvent};
 use std::str;
-use web_sys::{AudioContext, GainNode, HtmlCanvasElement};
-use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use ham_rs::Call;
-use ham_rs::countries::{CountryInfo,Country};
+use ham_rs::countries::{CountryInfo};
 use ham_rs::rig::{RECEIVER_MODES,Mode};
 use ham_rs::log::LogEntry;
+use ham_rs::lotw::LoTWStatus;
 
-use crate::spark::{Command,CommandResponse,Receiver,Radio,Version,Spot};
+use crate::spark::{Command,CommandResponse,Receiver,Radio,Version};
+use crate::spot::{Spot,SpotDB};
+use crate::audio::{AudioProvider};
+use crate::spectrum::{SpectrumProvider};
 
-#[derive(Ord, PartialOrd, Eq, PartialEq)]
-pub enum SpotFilter {
-    CQOnly
-}
+const LOGBOOK_KEY: &str = "radio.logs";
 
 pub struct Model {
-    // Currently unused
     pub route_service: RouteService<()>,
     pub route: Route<()>,
+    storage: StorageService,
     // Callbacks
     pub link: ComponentLink<Self>,
     // SparkSDR connection
     pub ws_location: String,
     wss: Option<WebSocket>,
+
     // List of receivers from getReceivers command
     receivers: Vec<Receiver>,
     // List of radios from the getRadios command
     radios: Vec<Radio>,
-    // Currently selected receiver
-    default_receiver: Option<u32>,
     // Version response from the getVersion command
     version: Option<Version>,
-    // TODO: temporary to keep local ui updated
-    poll: Option<Box<dyn Task>>,
-    // Spots from enabling SubscribeToSpots
-    spots: Vec<Spot>,
-    spot_filters: Vec<SpotFilter>,
+    // Currently selected receiver
+    default_receiver: Option<u32>,
+
+    pub spots: SpotDB,
+    pub audio: AudioProvider,
+    pub spectrum: SpectrumProvider,
+
     // Show/Hide receiver list
     show_receiver_list: bool,
     // Imported log file (ADIF format) for spot cross checking
-    import: Option<Vec<LogEntry>>,
+    pub import: Option<Vec<LogEntry>>,
     // Services for file importing (log file)
     reader: ReaderService,
     tasks: Vec<ReaderTask>,
-    // Local callsign cache
-    callsigns: Vec<CallsignInfo>,
-    // audio playback
-    audio_ctx: Option<AudioContext>,
-    gain: Option<GainNode>,
-    //pub analyser: AnalyserNode,
-    pub audio_pos: u64,
-    pub audio_start_time: f64,
-    pub canvas_node_ref: NodeRef,
-    pub tmp_canvas_node_ref: NodeRef,
-    pub canvas: Option<HtmlCanvasElement>,
-    pub tmp_canvas: Option<HtmlCanvasElement>,
-    pub subscribed_audio: Option<u32>,
-    pub subscribed_spectrum: Option<u32>,
-    pub spectrum_buffer: Vec<[f32;2048]>,
 }
 
 // Currently this is unused as there is only one route: /
 #[derive(Clone,Switch, Debug)]
 pub enum AppRoute {
+    #[to = "/map"]
+    Map,
     #[to = "/"]
     Index,
 }
@@ -92,67 +77,69 @@ pub enum WebsocketMsgType {
 
 type Chunks = bool;
 
-// Used with the local callsign cache for our requests
-// for callsign info.
-pub enum CallsignInfo {
-    Requested((Call, FetchTask)),
-    Found(Call),
-    NotFound(Call)
-}
-
-impl CallsignInfo {
-    pub fn call(&self) -> Call {
-        match self {
-            CallsignInfo::Requested((c, _)) => c.clone(),
-            CallsignInfo::Found(c) => c.clone(),
-            CallsignInfo::NotFound(c) => c.clone(),
-        }
-    }
-}
-
 pub enum Msg {
-    // not implemented
+    // Not implemented
     RouteChanged(Route<()>),
     ChangeRoute(AppRoute),
-    // websocket connection
+
+    // Websocket connection
     Connect,
     Disconnected,
     Connected,
     UpdateWebsocketAddress(String),
+
     // Command responses from SparkSDR (e.g. getReceiversResponse, getVersionResponse)
     CommandResponse(Result<CommandResponse, Error>),
-    // UI request frequency change up/down on digit X for receiver Uuid
+    // Audio/Spectrum data
+    ReceivedAudio(js_sys::ArrayBuffer),
+
+    // The following Msg will result in commands
+    // being sent to SparkSDR
+
+    // Request change to receiver frequency
     FrequencyUp(u32, i32), // digit 0 - 8 
     FrequencyDown(u32, i32), // digit 0 - 8
-    // UI request to change receiver Uuid mode
+    // Request change to receiver mode
     ModeChanged(u32, Mode),
-    // UI request to set the default receiver to Uuid
-    SetDefaultReceiver(u32),
-    // UI request to add a receiver to radio Uuid
+    // Request to add a receiver to a radio
     AddReceiver(u32),
-    // UI request to remove a receiver by Uuid
+    // Request to remove a receiver
     RemoveReceiver(u32),
     // Toggle radio power state
     TogglePower(u32),
-    // Not implemented (future support for audio data)
-    ReceivedAudio(js_sys::ArrayBuffer),
-    SetGain(f32),
-    MuteUnmute,
+    // Request change to the default receiver
+    // Will change audio subscription (if subscribed)
+    // Will change spectrum subscription
+    SetDefaultReceiver(u32),
+    // Subscribe/Unsubscribe to default receivers audio channel
     EnableAudio,
-    // UI toggle show/hide receiver list
+
+    // Local only messages
+
     ToggleReceiverList,
-    // None
     None,
-    // TODO: poll tick (temporary)
-    Tick,
-    // File import (log file)
+    // Log file import (adif file format)
     Files(Vec<File>, Chunks),
     Loaded(FileData),
     CancelImport,
     ConfirmImport,
+    // Control for client playback/volume
+    SetGain(f32),
+    MuteUnmute,
+    ClearSpots,
+
+    // Spot messages
+
     // Response to our callsign info request
     CallsignInfoReady(Result<Call,Error>),
+    // Response to our LoTW users request
+    LotwUsers(String),
+    // Set/Unset various spot filters
     ToggleCQSpotFilter,
+    ToggleStateSpotFilter,
+    ToggleCountrySpotFilter,
+    ToggleCurrentReceiverSpotFilter,
+    ToggleLoTWSpotFilter,
 }
 
 impl Model {
@@ -162,9 +149,20 @@ impl Model {
         let callback = link.callback(Msg::RouteChanged);
         route_service.register_callback(callback);
 
+        let storage = StorageService::new(Area::Local).expect("storage was disabled by the user");
+        let entries = {
+            if let Json(Ok(entries)) = storage.restore(LOGBOOK_KEY) {
+                ConsoleService::log("found log files");
+                Some(entries)
+            } else {
+                None
+            }
+        };
+
         Model {
             route_service,
             route,
+            storage,
             link,
             ws_location: "ws://localhost:4649/Spark".to_string(),
             wss: None,
@@ -172,43 +170,14 @@ impl Model {
             radios: Vec::new(),
             default_receiver: None,
             version: None,
-            poll: None,
-            spots: Vec::new(),
-            spot_filters: Vec::new(),
+            spots: SpotDB::new(),
+            audio: AudioProvider::new(),
+            spectrum: SpectrumProvider::new(),
             show_receiver_list: false,
-            import: None,
+            import: entries,
             reader: ReaderService::new(),
             tasks: Vec::new(),
-            callsigns: Vec::new(),
-            audio_ctx: None,
-            gain: None,
-            //analyser: analyser,
-            audio_pos: 0,
-            audio_start_time: 0.0,
-            canvas: None,
-            tmp_canvas: None,
-            canvas_node_ref: NodeRef::default(),
-            tmp_canvas_node_ref: NodeRef::default(),
-            subscribed_audio: None,
-            subscribed_spectrum: None,
-            spectrum_buffer: Vec::new(),
         }
-    }
-
-    pub fn initialize_audio(&mut self) {
-        // audio channel
-        let audio_ctx = web_sys::AudioContext::new().unwrap();
-        let destination = audio_ctx.destination();
-
-        //let analyser = audio_ctx.create_analyser().unwrap();
-        //analyser.connect_with_audio_node(&destination).unwrap();
-
-        let gain = audio_ctx.create_gain().unwrap();
-        gain.gain().set_value(1.0);
-        gain.connect_with_audio_node(&destination).unwrap();
-
-        self.audio_ctx = Some(audio_ctx);
-        self.gain = Some(gain);
     }
 
     // CommandResponse: getReceiversResponse
@@ -255,59 +224,6 @@ impl Model {
         }
     }
 
-    // CommandResponse: spotResponse
-    pub fn add_spot(&mut self, spot: Spot) {
-        // FIXME: temp fix
-        let mut spot = spot;
-
-        if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == spot.call.call() ) {
-            match &self.callsigns[index] {
-                CallsignInfo::Found(call) => {
-                    // update spot call with additional callsign info from cache
-                    let call = call.clone();
-                    spot.call = call;
-                },
-                _ => ()
-            }
-        } else {
-            let call = spot.call.clone();
-            let callback = self.link.callback(
-                move |response: Response<Json<Result<Call, Error>>>| {
-                    let (meta, Json(data)) = response.into_parts();
-                    if meta.status.is_success() {
-                        Msg::CallsignInfoReady(data)
-                    } else {
-                        Msg::None // FIXME: Handle this error accordingly.
-                    }
-                },
-            );
-
-            match call.prefix() {
-                // If callsign is United States make a request for additional callsign
-                // info from server.  Response will be handled by the Msg::CallsignInfoReady
-                // message handler
-                Some(prefix) if call.country() == Ok(Country::UnitedStates) => {
-                    let request = Request::get(format!("/out/{}/{}.json", prefix, spot.call.call())).body(Nothing).unwrap();
-                    let ft = FetchService::fetch(request, callback).unwrap();
-
-                    let info = CallsignInfo::Requested((call, ft));
-                    self.callsigns.push(info);
-                },
-                _ => ()
-            }
-        }
-
-        self.spots.push(spot);
-    }
-
-    // helper function to remove all except `limit` recent spots
-    pub fn trim_spots(&mut self, limit: usize) {
-        if self.spots.len() > limit {
-            let drain = self.spots.len() - limit;
-            self.spots.drain(0..drain);
-        }
-    }
-
     pub fn change_receiver_mode(&mut self, receiver_id: u32, mode: Mode) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             self.receivers[index].mode = mode.clone();
@@ -344,22 +260,6 @@ impl Model {
             if digit == 8 { self.receivers[index].frequency -= 1.0 }
 
             self.send_command(Command::SetFrequency { frequency: (self.receivers[index].frequency as i32).to_string(), id: receiver_id });
-        }
-    }
-
-    pub fn cache_callsign_info(&mut self, call: Call) {
-        let indexes : Vec<usize> = self.spots.iter().enumerate().filter(|&(_, s)| s.call.call() == call.call() ).map(|(i, _)| i).collect();
-        for index in indexes {
-            // update spot record with our updated callsign info
-            self.spots[index].call = call.clone();
-        }
-
-        // Mark callsign as found in local callsign cache for
-        // future lookups
-        if let Some(index) = self.callsigns.iter().position(|c| c.call().call() == call.call()) {
-            self.callsigns[index] = CallsignInfo::Found(call)
-        } else {
-            self.callsigns.push(CallsignInfo::Found(call))
         }
     }
 
@@ -441,10 +341,9 @@ impl Model {
         self.wss = None;
         self.receivers = Vec::new();
         self.radios = Vec::new();
-        self.callsigns = Vec::new();
         self.version = None;
         self.default_receiver = None;
-        self.spots = Vec::new();
+        self.spots = SpotDB::new();
     }
 
     pub fn is_connected(&self) -> bool {
@@ -464,86 +363,71 @@ impl Model {
         }
     }
 
-    pub fn audio_ctx(&self) -> Option<AudioContext> {
-        match &self.audio_ctx {
-            Some(audio_ctx) => Some(audio_ctx.clone()),
-            None => None,
+    pub fn subscribe_to_audio(&mut self) {
+        match self.audio.receiving_audio() {
+            Some(previous_audio_channel) => {
+                self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
+            },
+            None => ()
         }
+        let rx_id =
+            match self.default_receiver() {
+                Some(receiver) => {
+                    self.send_command(Command::SubscribeToAudio{ rx_id: receiver.id, enable: true });
+                    ConsoleService::log(&format!("subscribed to audio channel: {}", receiver.id));
+                    Some(receiver.id)
+                },
+                None => None,
+            };
+        self.audio.set_subscribed(rx_id);
     }
 
-    pub fn gain(&self) -> Option<GainNode> {
-        match &self.gain {
-            Some(gain) => Some(gain.clone()),
-            None => None,
+    pub fn unsubscribe_to_audio(&mut self) {
+        match self.audio.receiving_audio() {
+            Some(previous_audio_channel) => {
+                self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
+                ConsoleService::log("unsubscribed to audio");
+            },
+            None => ()
         }
+        self.audio.set_subscribed(None);
     }
 
-    pub fn set_gain(&mut self, gain: f32) {
-        if let Some(g) = &self.gain {
-            g.gain().set_value(gain);
-        }
-    }
+    pub fn set_default_receiver(&mut self, receiver: Option<u32>) {
+        if self.default_receiver == receiver { /* do nothing */ }
+        else {
+            // unsubscribe to old spectrum data
+            match self.spectrum.receiving_spectrum() {
+                Some(previous_subscription) => {
+                    self.send_command(Command::SubscribeToSpectrum{ rx_id: previous_subscription, enable: false });
+                },
+                None => ()
+            }
 
-    pub fn toggle_mute(&mut self) {
-        if let Some(g) = &self.gain {
-            let value = g.gain().value();
-            if value == 0.0 {
-                g.gain().set_value(1.0);
-                ConsoleService::log("unmuting audio");
-            } else {
-                g.gain().set_value(0.0);
-                ConsoleService::log("muting audio");
+            // subscribe to new spectrum data
+            match receiver {
+                Some(receiver_id) => {
+                    self.send_command(Command::SubscribeToSpectrum{ rx_id: receiver_id, enable: true });
+                    self.spectrum.set_subscribed(Some(receiver_id));
+                },
+                None => ()
+            }
+
+            // update default receiver
+            self.default_receiver = receiver;
+
+            // switch audio subscriptions if already subscribed
+            match self.audio.receiving_audio() {
+                Some(_) => {
+                    self.subscribe_to_audio();
+                },
+                None => ()
             }
         }
     }
 
-    pub fn set_default_receiver(&mut self, receiver: Option<u32>) {
-        match self.subscribed_audio {
-            Some(previous_audio_channel) => {
-                self.send_command(Command::SubscribeToAudio{ rx_id: previous_audio_channel, enable: false });
-                match receiver {
-                    Some(receiver_id) => {
-                        self.send_command(Command::SubscribeToAudio{ rx_id: receiver_id, enable: true });
-                        self.subscribed_audio = Some(receiver_id);
-                    },
-                    None => (),
-                }
-            },
-            None => ()
-        }
-
-        match receiver {
-            Some(receiver_id) => {
-                match self.subscribed_spectrum {
-                    Some(previous_subscription) => {
-                        self.send_command(Command::SubscribeToSpectrum{ rx_id: previous_subscription, enable: false });
-                    },
-                    None => ()
-                }
-                self.send_command(Command::SubscribeToSpectrum{ rx_id: receiver_id, enable: true });
-                self.subscribed_spectrum = Some(receiver_id);
-            },
-            None => ()
-        }
-        self.default_receiver = receiver;
-    }
-
     pub fn toggle_receiver_list(&mut self) {
         self.show_receiver_list = !self.show_receiver_list;
-    }
-
-    pub fn enable_ticks(&mut self, interval: u64) {
-        let handle = IntervalService::spawn(
-            Duration::from_secs(interval), 
-            self.link.callback(|_| Msg::Tick));
-        self.poll = Some(Box::new(handle))
-    }
-
-    pub fn ticks_enabled(&self) -> bool {
-        match self.poll {
-            Some(_) => true,
-            None => false,
-        }
     }
 
     pub fn read_file(&mut self, file: File) {
@@ -569,6 +453,7 @@ impl Model {
                     }
                 }
                 self.import = Some(records);
+                self.storage.store(LOGBOOK_KEY, Json(&self.import));
             },
             Err(e) => {
                 ConsoleService::error(&format!("unable to load adif: {}", e));
@@ -578,6 +463,7 @@ impl Model {
 
     pub fn clear_adif_data(&mut self) {
         self.import = None;
+        self.storage.store(LOGBOOK_KEY, Json(&self.import));
     }
 
     pub fn get_radio_power_state(&self, radio_id: u32) -> Option<bool> {
@@ -585,15 +471,6 @@ impl Model {
             Some(self.radios[index].running)
         } else {
             None
-        }
-    }
-
-    pub fn radio_list_control(&self) -> Html {
-        html! {
-            { for self.radios.iter().map(|r| {
-                    self.radio(&r)
-                  })
-            }
         }
     }
 
@@ -613,19 +490,6 @@ impl Model {
         }
     }
 
-    pub fn enable_audio_button(&self) -> Html {
-        let msg =
-            match self.subscribed_audio {
-                Some(_) => "Disable Audio",
-                None => "Enable Audio"
-            };
-        html! {
-            <button class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio)>
-                <span>{ msg }</span>
-            </button>
-        }
-    }
-
     pub fn receiver_list_control(&self) -> Html {
         html! {
             {
@@ -636,67 +500,150 @@ impl Model {
         }
     }
 
-    pub fn add_filter(&mut self, filter: SpotFilter) {
-        self.spot_filters.push(filter);
-        self.spot_filters.sort();
-        self.spot_filters.dedup();
-    }
-
-    pub fn remove_filter(&mut self, filter:SpotFilter) -> Result<(),&'static str> {
-        match self.spot_filters.iter().position(|x| *x == filter) {
-            Some(index) => {
-                self.spot_filters.remove(index);
-                Ok(())
-            },
-            None => Err("not found")
-        }
-    }
-    
-    pub fn cq_only(&self) -> bool {
-        self.spot_filters.iter().any(|s| match s {
-            SpotFilter::CQOnly => true,
-        })
-    }
-
     pub fn spots_view(&self) -> Html {
+        let table_class =
+            match self.default_receiver() {
+                Some(receiver) if receiver.has_spots() && self.spots.current_receiver_spot_filter_enabled() => {
+                    "table is-narrow is-fullwidth filter-currentrx"
+                },
+                _ => "table is-narrow is-fullwidth",
+            };
+
         html! {
             <>
-                <div style="clear:both"></div>
-
+                <div style="text-align:right">
+                    <button class="button" onclick=self.link.callback(move |_| Msg::ClearSpots)>
+                        <span class="icon is-small">
+                            <i class="far fa-trash-alt"></i>
+                        </span>
+                    </button>
+                </div>
                 <div class="s">
-                    <table class="table">
+                    <table class=table_class>
                         <tr>
                             <th>{ "UTC" }</th>
                             <th>{ "dB" }</th>
                             <th>{ "DT" }</th>
-                            <th>{ "Freq" }</th>
-                            <th>{ "Mode" }</th>
+                            <th class="freqc">{ "Freq" }</th>
+                            <th class="modec">{ "Mode" }</th>
                             <th>{ "Dist" }</th>
                             <th>{ "Message" }</th>
                             <th></th>
                             <th></th>
                             <th></th>
+                            {
+                                match self.spots.has_lotw_users() {
+                                    true => html! { <th>{ "LoTW" }</th> },
+                                    false => html! {}
+                                }
+                            }
                         </tr>
-                        { for self.spots.iter().rev().map(|s| {
+                        { for self.spots.spots().iter().rev().map(|s| {
                             self.spot(&s)
                           })
                         }
                     </table>
                 </div>
-
-                <div class="spot-filters">
-                    <label class="switch">
-                        <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.cq_only() onclick=self.link.callback(move |_| Msg::ToggleCQSpotFilter ) />
-                        <span class="slider"></span>
-                    </label>
-                    { "CQ Only" }
-                </div>
-
-                { self.import_adif_form() }
             </>
         }
     }
 
+    pub fn spot_filters_sidebar(&self) -> Html {
+        let default_receiver_has_spots =
+            match self.default_receiver() {
+                Some(receiver) if receiver.has_spots() => true,
+                _ => false,
+            };
+
+        html! {
+            <div class="receiver-control spot-filters">
+                <table class="table is-fullwidth">
+                    <thead>
+                        <tr>
+                            <th colspan="2">{ "Spot Filters" }</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>{ "CQ Only" }</td>
+                            <td style="text-align:right">
+                                <label class="switch">
+                                    <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.spots.cq_only_spot_filter_enabled() onclick=self.link.callback(move |_| Msg::ToggleCQSpotFilter ) />
+                                    <span class="slider"></span>
+                                </label>
+                            </td>
+                        </tr>
+                        { if default_receiver_has_spots {
+                            html! {
+                                <tr>
+                                    <td>{ "Current Rx" }</td>
+                                    <td style="text-align:right">
+                                        <label class="switch">
+                                            <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.spots.current_receiver_spot_filter_enabled() onclick=self.link.callback(move |_| Msg::ToggleCurrentReceiverSpotFilter ) />
+                                            <span class="slider"></span>
+                                        </label>
+                                    </td>
+                                </tr>
+                            } } else {
+                                html! {}
+                            }
+                        }
+                        { if self.spots.has_lotw_users() {
+                            html! {
+                                <tr>
+                                    <td>{ "LoTW" }</td>
+                                    <td style="text-align:right">
+                                        <label class="switch">
+                                            <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.spots.lotw_spot_filter_enabled() onclick=self.link.callback(move |_| Msg::ToggleLoTWSpotFilter ) />
+                                            <span class="slider"></span>
+                                        </label>
+                                    </td>
+                                </tr>
+                            } } else {
+                                html! {}
+                            }
+                        }
+                        { if let Some(_) = self.import { 
+                              html! {
+                                <>
+                                <tr>
+                                    <td>{ "New State" }</td>
+                                    <td style="text-align:right">
+                                        <label class="switch">
+                                            <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.spots.state_spot_filter_enabled() onclick=self.link.callback(move |_| Msg::ToggleStateSpotFilter ) />
+                                            <span class="slider"></span>
+                                        </label>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>{ "New Country" }</td>
+                                    <td style="text-align:right">
+                                        <label class="switch">
+                                            <input id="switchColorDefault" type="checkbox" name="switchColorDefault" checked=self.spots.country_spot_filter_enabled() onclick=self.link.callback(move |_| Msg::ToggleCountrySpotFilter ) />
+                                            <span class="slider"></span>
+                                        </label>
+                                    </td>
+                                </tr>
+                                </>
+                              }
+                          } else {
+                              html! {}
+                        }}
+                    </tbody>
+                    <thead>
+                        <tr>
+                            <th colspan="2">{ "Log File" }</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td colspan="2">{ self.import_adif_form() }</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
     pub fn version_html(&self) -> Html {
         match &self.version {
             Some(version) => {
@@ -720,8 +667,8 @@ impl Model {
                         match &self.import {
                             None => html! {
                                 <>
-                    <p>{"Import log file (adif format) to cross check spots."}</p>
-                    <input type="file" multiple=true onchange=self.link.callback(move |value| {
+                    <p>{"Compare spots to log file to find new countries and states."}</p>
+                    <input class="file-import" type="file" multiple=true onchange=self.link.callback(move |value| {
                             let mut result = Vec::new();
                             if let ChangeData::Files(files) = value {
                                 let files = js_sys::try_iter(&files)
@@ -733,11 +680,12 @@ impl Model {
                             }
                             Msg::Files(result, false)
                         })/>
+                    <p><i>{ "(adif only)" }</i></p>
                                 </>
                             },
                             Some(import) => html! {
                                 <>
-                                    <p>{ format!("Found {} records", import.len()) }</p>
+                                    <p>{ format!("Found {} contacts", import.len()) }</p>
                                     <p>
                                         <input type="button" class="button" value="Cancel Import" onclick=self.link.callback(|_| Msg::CancelImport) />
                                     </p>
@@ -750,9 +698,8 @@ impl Model {
     }
 
     fn spot(&self, spot: &Spot) -> Html {
-        let call = Call::new(spot.call.to_string());
         let (country_icon, state_class) =
-            match call.country() {
+            match spot.call.country() {
                 Ok(country) => {
                     let (new_country, new_state) =
                         match &self.import {
@@ -761,15 +708,15 @@ impl Model {
                                     if let Some(_index) = import.iter().position(|i| i.call.country() == Ok(country.clone())) {
                                         ""
                                     } else {
-                                        "new-country"
+                                        "has-text-success"
                                     };
                                 let new_state =
-                                    match call.state() {
+                                    match spot.call.state() {
                                         Some(state) => {
                                             if let Some(_index) = import.iter().position(|i| i.call.state() == Some(state.to_string())) {
                                                 ""
                                             } else {
-                                                "new-state"
+                                                "has-text-success"
                                             }
                                         },
                                         _ => "",
@@ -783,13 +730,27 @@ impl Model {
                 Err(_) => (html! {}, ""),
             };
 
+        let (lotw_enabled, uses_lotw) =
+            match spot.call.lotw() {
+                LoTWStatus::LastUpload(_) | LoTWStatus::Registered => (true, html! { <span class="has-text-success">{ "Yes" }</span> }),
+                LoTWStatus::Unregistered => (true, html! { { "No" } }),
+                LoTWStatus::Unknown => (false, html! {})
+            };
+
+        let spot_receiver_id =
+            if let Some(index) = self.receivers.iter().position(|i| i.frequency == spot.tuned_frequency && i.mode == spot.mode ) {
+                Some(self.receivers[index].id)
+            } else {
+                None
+            };
+
         html! {
             <tr>
                 <td>{ spot.time.format("%H%M%S") }</td>
                 <td>{ spot.snr }</td>
                 <td>{ spot.dt }</td>
-                <td>{ format!("{} (+{})", spot.tuned_frequency, (spot.frequency - spot.tuned_frequency)) }</td>
-                <th>{ spot.mode.mode() }</th>
+                <td class="freqc"><span>{ format!("{} (+", spot.tuned_frequency) }</span>{ format!("{}", (spot.frequency - spot.tuned_frequency)) }<span>{ ")" }</span></td>
+                <th class="modec">{ spot.mode.mode() }</th>
                 <td>{ match spot.distance {
                          Some(dist) => format!("{}", dist),
                          None => format!(""),
@@ -797,50 +758,31 @@ impl Model {
                     }</td>
                 {
                     if let Some(msg) = &spot.msg {
-                        match msg.contains("CQ") {
-                            true => html! { <th>{ msg.to_string() }</th> },
-                            false => html! { <td>{ msg.to_string() }</td> }
+                        match (msg.contains("CQ"), spot_receiver_id) {
+                            (true, Some(receiver_id)) => html! { <th><a onclick=self.link.callback(move |_| Msg::SetDefaultReceiver(receiver_id) )>{ msg.to_string() }</a></th> },
+                            (true, None) => html! { <th>{ msg.to_string() }</th> },
+                            (false, _) => html! { <td>{ msg.to_string() }</td> }
                         }
                     } else {
                         html! { <td>{ "--" }</td> }
                     }
                 }
                 <td>{ country_icon }</td>
-                <td>{ match spot.call.state() {
+                <td class=state_class>{ match spot.call.state() {
                           Some(state) => format!("{}", state),
                           None => format!("")
                       } }</td>
-                <td class=state_class>{ match spot.call.op() {
+                <td>{ match spot.call.op() {
                           Some(op) => format!("{}", op),
                           None => format!("")
                       } }</td>
+                {
+                    match lotw_enabled {
+                        true => html! { <td>{ uses_lotw }</td> },
+                        false => html! {}
+                    }
+                }
             </tr>
-        }
-    }
-
-    pub fn radio(&self, radio: &Radio) -> Html {
-        let radio_id = radio.id;
-        let power_class =
-            match radio.running {
-                true => "icon is-small has-text-success",
-                false => "icon is-small",
-            };
-        html! {
-            <div class="radio-control">
-                <button class="button is-text" disabled=true>
-                    { radio.name.to_string() }
-                </button>
-                <button class="button" title="Power" onclick=self.link.callback(move |_| Msg::TogglePower(radio_id))>
-                    <span class=power_class>
-                    <i class="fas fa-power-off fa-lg"></i>
-                    </span>
-                </button>
-                <button class="button" onclick=self.link.callback(move |_| Msg::AddReceiver(radio_id) ) title="Add Receiver">
-                    <span class="icon is-small">
-                    <i class="fas fa-plus fa-lg"></i>
-                    </span>
-                </button>
-            </div>
         }
     }
 
@@ -852,20 +794,20 @@ impl Model {
         let (class_name, is_default) = 
             if Some(receiver.id) == self.default_receiver {
                 if !self.show_receiver_list {
-                    ("receiver-control selected main-view", true)
+                    ("receiver-control selected main-view has-background-light", true)
                 } else {
-                    ("receiver-control selected", true)
+                    ("receiver-control selected has-background-light", true)
                 }
             } else {
                 ("receiver-control", false)
             };
         let mute_unmute_class =
-            match self.subscribed_audio {
+            match self.audio.receiving_audio() {
                 Some(_) => "fas fa-volume-up",
                 _ => "fas fa-volume-mute"
             };
         let mute_unmute_main_class =
-            match self.subscribed_audio {
+            match self.audio.receiving_audio() {
                 Some(_) => "icon is-small",
                 None => "icon is-small has-text-danger",
             };
@@ -954,5 +896,125 @@ impl Model {
         let chunks: Vec<_> = bytes.chunks(3).map(|chunk| str::from_utf8(chunk).unwrap()).collect();
         let result: Vec<_> = chunks.join(",").bytes().rev().collect();
         String::from_utf8(result).unwrap()
+    }
+
+    fn radio_navbar_controls(&self, radio: &Radio) -> Html {
+        let radio_id = radio.id;
+        let power_class =
+            match radio.running {
+                true => "icon is-small has-text-success",
+                false => "icon is-small",
+            };
+        let short_name = &radio.name[14..];
+        html! {
+            <>
+                <a class="navbar-item" disabled=true>
+                    { short_name }
+                </a>
+                <div class="navbar-item">
+                    <div class="field has-addons">
+                        <p class="control">
+                            <button class="button" title="Power" onclick=self.link.callback(move |_| Msg::TogglePower(radio_id))>
+                                <span class=power_class>
+                                <i class="fas fa-power-off fa-lg"></i>
+                                </span>
+                            </button>
+                        </p>
+                        <p class="control">
+                            <button class="button" onclick=self.link.callback(move |_| Msg::AddReceiver(radio_id) ) title="Add Receiver">
+                                <span class="icon is-small">
+                                <i class="fas fa-plus fa-lg"></i>
+                                </span>
+                            </button>
+                        </p>
+                    </div>
+                </div>
+            </>
+        }
+    }
+
+    pub fn navbar_view(&self) -> Html {
+        let cls = if self.show_receiver_list == true {
+            "fa-chevron-up"
+        } else {
+            "fa-chevron-down"
+        };
+        let (spot_class, map_class) =
+            match AppRoute::switch(self.route.clone()) {
+                Some(AppRoute::Index) => ("navbar-item is-active", "navbar-item"),
+                Some(AppRoute::Map) => ("navbar-item", "navbar-item is-active"),
+                None => ("navbar-item is-active","navbar-item"),
+            };
+            
+        html! {
+            <nav class="navbar is-light" role="navigation" aria-label="main navigation">
+                <div class="navbar-brand">
+                    { for self.radios.iter().map(|r| {
+                        self.radio_navbar_controls(&r)
+                      })
+                    }
+                    <a class="navbar-item" onclick=self.link.callback(move |_| Msg::ToggleReceiverList)>
+                        <span>{ format!("{} Receivers ", self.receivers.len()) }</span>
+                        <span class="icon is-small">
+                            <i class=("fas", cls)></i>
+                        </span>
+                    </a>
+
+                    <div class="navbar-burger burger" data-target="radioNavigation">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </div>
+                <div id="radioNavigation" class="navbar-menu">
+                    <div class="navbar-start">
+
+
+                        <a class=spot_class onclick=self.link.callback(|_| Msg::ChangeRoute(AppRoute::Index))>
+                            { "Spots" }
+                        </a>
+
+                        <a class=map_class onclick=self.link.callback(|_| Msg::ChangeRoute(AppRoute::Map))>
+                            { "Map" }
+                        </a>
+
+                    </div>
+                </div>
+            </nav>
+        }
+    }
+
+    pub fn footer_view(&self) -> Html {
+        html! {
+            <div class="copy">
+                <div class=if self.is_connected() { "" } else { "container" }>
+                    { self.version_html() }
+                    <p><a href="https://github.com/nricciar/sparksdr-websocket-demo" target="_blank">{ "sparksdr-websocket-demo @ github" }</a></p>
+                </div>
+            </div>
+        }
+    }
+
+    pub fn disconnected_view(&self) -> Html {
+        html! {
+            <>
+                <div class="container">
+                    <h1 class="title">{ "Disconnected" }</h1>
+                    <p>{ "Make sure SparkSDR has Web Sockets enabled, and hostname is correct "}</p>
+                    <div class="field is-grouped ws-connection">
+                    <input class="input"
+                        value=&self.ws_location
+                        oninput=self.link.callback(|e: InputData| Msg::UpdateWebsocketAddress(e.value))
+                        onkeypress=self.link.callback(|e: KeyboardEvent| {
+                            if e.key() == "Enter" { Msg::Connect } else { Msg::None }
+                        }) />
+                    <button class="button is-link" onclick=self.link.callback(move |_| Msg::Connect )>
+                        { "Connect" }
+                    </button>
+                    </div>
+                </div>
+                { self.footer_view() }
+            </>
+        }
     }
 }

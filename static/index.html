@@ -8,6 +8,67 @@
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.0/css/bulma.min.css">
         <link rel="stylesheet" href="css/app.css">
         <link rel="stylesheet" href="css/flag-icon.min.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+        <script type="text/javascript">
+            var mapView = null;
+            var markers = [];
+            var lastTime = null;
+            var icons = {};
+            var bands = ["160m","80m","40m","30m","20m","17m","15m","12m","10m","6m","2m","1.25cm","70cm","33cm","unknown"];
+            bands.forEach(function (band) {
+                icons[band] = L.icon({
+                    iconUrl: 'markers/small-marker-'+band+'.png',
+                    iconSize: [12, 20],
+                    iconAnchor: [6, 20],
+                    shadowUrl: 'small-marker-shadow.png',
+                    shadowSize: [18,18],
+                    shadowAnchor: [6, 18]
+                });
+                icons[band + "empty"] = L.icon({
+                    iconUrl: 'markers/small-marker-'+band+'-empty.png',
+                    iconSize: [12, 20],
+                    iconAnchor: [6, 20],
+                    shadowUrl: 'small-marker-shadow.png',
+                    shadowSize: [18,18],
+                    shadowAnchor: [6, 18]
+                });
+                icons[band + "small"] = L.icon({
+                    iconUrl: 'markers/small-marker-'+band+'-empty.png',
+                    iconSize: [6, 10],
+                    iconAnchor: [3, 10],
+                    shadowUrl: 'small-marker-shadow.png',
+                    shadowSize: [9,9],
+                    shadowAnchor: [3, 9]
+                });
+            });
+
+            function addMarker(lat, lon, spotOn, freq, bandName, lotw, cq) {
+                if (lastTime == null || lastTime != spotOn) {
+                    lastTime = spotOn;
+                    let tmp = [];
+                    markers.push(tmp);
+                }
+                if (cq && !lotw) {
+                    bandName = bandName + "empty";
+                }
+
+                if (!cq) {
+                    bandName = bandName + "small";
+                }
+                let tmp = L.marker([lat, lon], {icon: icons[bandName]}).addTo(mapView);
+                markers[markers.length-1].push(tmp);
+            }
+
+            setInterval(function() {
+                if (markers.length > 10) {
+                    let tmp = markers.shift();
+                    tmp.forEach(function(entry) {
+                        entry.remove();
+                    });
+                }
+            }, 1000);
+        </script>
         <script type="module">
             import init from "./wasm.js"
             init()
