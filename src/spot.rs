@@ -9,14 +9,11 @@ use yew::services::storage::{Area, StorageService};
 use yew::services::{ConsoleService};
 use std::collections::HashMap;
 
-use ham_rs::{Call,Grid};
-use ham_rs::countries::{CountryInfo,Country};
-use ham_rs::log::LogEntry;
-use ham_rs::rig::{Mode,Band};
+use ham_rs::{Call,Grid,CountryInfo,Country,LogEntry,Band,Mode};
 use ham_rs::lotw::LoTWStatus;
 
 use crate::model::{Model,Msg};
-use crate::spark::Receiver;
+use crate::spark::{Receiver};
 
 const FILTERS_KEY: &str = "radio.spots.filters";
 const LOTW_USERS_KEY: &str = "radio.spots.lotwUsers";
@@ -298,6 +295,16 @@ pub enum SpotFilter {
     LoTW,
 }
 
+
+
+// Used with the local callsign cache for our requests
+// for callsign info.
+pub enum CallsignInfo {
+    Requested((Call, FetchTask)),
+    Found(Call),
+    NotFound(Call)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Spot {
     pub time: DateTime<Utc>,
@@ -375,14 +382,6 @@ pub fn callsign_as_string<'de, D>(deserializer: D) -> Result<Call, D::Error>
 {
     let v : String = Deserialize::deserialize(deserializer)?;
     Ok(Call::new(v))
-}
-
-// Used with the local callsign cache for our requests
-// for callsign info.
-pub enum CallsignInfo {
-    Requested((Call, FetchTask)),
-    Found(Call),
-    NotFound(Call)
 }
 
 impl CallsignInfo {

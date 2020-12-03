@@ -3,10 +3,8 @@
 extern crate serde_derive;
 extern crate serde_json;
 use wasm_bindgen::prelude::*;
-use yew::{html, Component, ComponentLink, Html, ShouldRender, InputData};
-use yew::{events::KeyboardEvent};
+use yew::{html, Component, ComponentLink, Html, ShouldRender};
 use yew::services::{ConsoleService};
-use yew_router::{route::Route, service::RouteService};
 use yew_router::{Switch};
 use web_sys::{HtmlCanvasElement};
 use js_sys::{DataView};
@@ -79,8 +77,8 @@ impl Component for Model {
                         self.spots.trim_spots(100);
                     },
                     // ReceiverResponse: receiver updates (mode/frequency)
-                    CommandResponse::ReceiverResponse{ id: receiver_id, frequency, mode } => {
-                        self.update_receiver(receiver_id, mode, frequency);
+                    CommandResponse::ReceiverResponse{ id: receiver_id, frequency, mode, filter_low, filter_high } => {
+                        self.update_receiver(receiver_id, mode, frequency, filter_low, filter_high);
                     }
                 }
                 true
@@ -105,10 +103,15 @@ impl Component for Model {
                     (1, Some(_), _) => {
                         self.audio.import_audio_data(data);
                     },
-                    (2, _, Some(subscribed_spectrum)) if subscribed_spectrum == (receiver_id as u32) => {
-                        let freq_start = view.get_float64_endian(5, true).floor();
-                        let freq_stop = view.get_float64_endian(13, true).floor();
-                        self.spectrum.import_spectrum_data(data, freq_start, freq_stop);
+                    (2, _, Some(subscribed_spectrum)) => {// if subscribed_spectrum == (receiver_id as u32) => {
+                        match self.default_receiver() {
+                            Some(receiver) => {
+                                let freq_start = view.get_float64_endian(5, true).floor();
+                                let freq_stop = view.get_float64_endian(13, true).floor();
+                                self.spectrum.import_spectrum_data(data, freq_start, freq_stop);
+                            },
+                            None => () // should never happen
+                        }
                     },
                     (2, _, Some(_)) => (),
                     (_, None, None) => {
@@ -208,10 +211,12 @@ impl Component for Model {
                 true
             },
             Msg::RouteChanged(route) => {
+                self.hide_receiver_list();
                 self.route = route;
                 true
             },
             Msg::ChangeRoute(route) => {
+                self.hide_receiver_list();
                 // This might be derived in the future
                 self.route = route.into();
                 self.route_service.set_route(&self.route.route, ());
@@ -297,24 +302,15 @@ impl Component for Model {
 
         if first_render {
             self.audio.create_audio_context();
-            js_sys::eval("mapView = L.map('map').setView([0.0, 0.0], 2);").unwrap();
-            let tile_layer_js = "L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token=pk.eyJ1Ijoia2s0d2pzIiwiYSI6ImNraTFnY28xNDAwZ3Ayd3BhcGs1aTF2MzUifQ.HKwoDr52uGnmnllpgESJIg', {
-    attribution: 'Map data &copy; <a href=\"https://www.openstreetmap.org/\">OpenStreetMap</a> contributors, <a href=\"https://creativecommons.org/licenses/by-sa/2.0/\">CC-BY-SA</a>, Imagery © <a href=\"https://www.mapbox.com/\">Mapbox</a>',
-    maxZoom: 18,
-    id: 'mapbox/light-v10',
-    tileSize: 512,
-    zoomOffset: -1,
-    accessToken: 'your.mapbox.access.token'
-}).addTo(mapView);";
-            js_sys::eval(tile_layer_js).unwrap();
+            js_sys::eval("initMap();").unwrap();
         }
     }
 
     fn view(&self) -> Html {
-        let (is_index, spectrum_style, map_stype) =
+        let (is_index, spectrum_style, map_style) =
             match AppRoute::switch(self.route.clone()) {
-                Some(AppRoute::Index) | None => (true, "", "height:0px;overflow:hidden"),
-                _ => (false, "height:120px;overflow:hidden", ""),
+                Some(AppRoute::Index) | None => (true, "position:relative;margin-top:10px", "height:0px;overflow:hidden;"),
+                _ => (false, "height:120px;overflow:hidden;position:relative;margin-top:10px", ""),
             };
 
         match self.is_connected() {
@@ -331,7 +327,10 @@ impl Component for Model {
 
                         <div style="margin-left:15em;padding:0 10px 0 20px">
                             <div style=spectrum_style>
-                                <canvas ref=self.spectrum.canvas_node_ref.clone() width="2048" height="200" style="width:100%;height:200px;margin-top:10px;background-color: black ;" />
+                                <div id="receiver-marker" style="display:none">
+                                    <div></div>
+                                </div>
+                                <canvas id="waterfall" ref=self.spectrum.canvas_node_ref.clone() width="2048" height="200" style="position:relative;width:100%;height:200px;background-color: black" />
                             </div>
                             {
                                 if is_index {
@@ -339,8 +338,8 @@ impl Component for Model {
                                         <>
                                             <table style="width:100%;border-left:2px solid #555;border-right:2px solid #555">
                                                 <tr>
-                                                    <th style="padding-left:10px">{ self.spectrum.freq_start() }</th>
-                                                    <th style="text-align:right;padding-right:10px">{ self.spectrum.freq_stop() }</th>
+                                                    <th style="padding-left:10px" id="freq-start">{ self.spectrum.freq_start() }</th>
+                                                    <th style="text-align:right;padding-right:10px" id="freq-end">{ self.spectrum.freq_stop() }</th>
                                                 </tr>
                                             </table>
                                             { self.spots_view() }
@@ -350,7 +349,7 @@ impl Component for Model {
                                     html! { }
                                 }
                             }
-                            <div style=map_stype>
+                            <div style=map_style>
                                 <div id="map" style="width:100%;height:600px" class="has-background-light"> </div>
                             </div>
                         </div>

@@ -13,13 +13,10 @@ use std::str;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use ham_rs::Call;
-use ham_rs::countries::{CountryInfo};
-use ham_rs::rig::{RECEIVER_MODES,Mode};
-use ham_rs::log::LogEntry;
+use ham_rs::{Call,CountryInfo,LogEntry,Mode};
 use ham_rs::lotw::LoTWStatus;
 
-use crate::spark::{Command,CommandResponse,Receiver,Radio,Version};
+use crate::spark::{Command,CommandResponse,Receiver,Radio,Version,RECEIVER_MODES};
 use crate::spot::{Spot,SpotDB};
 use crate::audio::{AudioProvider};
 use crate::spectrum::{SpectrumProvider};
@@ -150,14 +147,18 @@ impl Model {
         route_service.register_callback(callback);
 
         let storage = StorageService::new(Area::Local).expect("storage was disabled by the user");
-        let entries = {
-            if let Json(Ok(entries)) = storage.restore(LOGBOOK_KEY) {
-                ConsoleService::log("found log files");
-                Some(entries)
-            } else {
-                None
-            }
-        };
+        let entries = 
+            match storage.restore(LOGBOOK_KEY) {
+                Json(Ok(entries)) => {
+                    ConsoleService::log("found log files");
+                    entries
+                },
+                Json(Err(err)) => {
+                    ConsoleService::error(&format!("log import error: {}", err));
+                    None
+                },
+                _ => None
+            };
 
         Model {
             route_service,
@@ -215,10 +216,17 @@ impl Model {
     }
 
     // CommandResponse: ReceiverResponse
-    pub fn update_receiver(&mut self, receiver_id: u32, mode: Mode, frequency: f32) {
+    pub fn update_receiver(&mut self, receiver_id: u32, mode: Mode, frequency: f32, filter_low: f32, filter_high: f32) {
         if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
             self.receivers[index].frequency = frequency;
             self.receivers[index].mode = mode;
+            self.receivers[index].filter_low = filter_low;
+            self.receivers[index].filter_high = filter_high;
+            let receiver = self.receivers[index].clone();
+
+            let js = &format!("initWaterfallNav(\"{}\", {}, {}, {});", receiver.mode.mode(), receiver.frequency, receiver.filter_high, receiver.filter_low);
+            ConsoleService::log(&format!("js: {}", js));
+            js_sys::eval(&js).unwrap();
         } else {
             ConsoleService::error(&format!("Attempted to update a receiver that does not exist: {}", receiver_id));
         }
@@ -407,27 +415,48 @@ impl Model {
             // subscribe to new spectrum data
             match receiver {
                 Some(receiver_id) => {
-                    self.send_command(Command::SubscribeToSpectrum{ rx_id: receiver_id, enable: true });
-                    self.spectrum.set_subscribed(Some(receiver_id));
-                },
-                None => ()
-            }
+                    if let Some(index) = self.receivers.iter().position(|i| i.id == receiver_id) {
+                        let receiver = self.receivers[index].clone();
+                        self.send_command(Command::SubscribeToSpectrum{ rx_id: receiver_id, enable: true });
+                        self.spectrum.set_subscribed(Some(receiver_id));
 
-            // update default receiver
-            self.default_receiver = receiver;
+                        let js = format!("initWaterfallNav(\"{}\", {}, {}, {});", receiver.mode.mode(), receiver.frequency, receiver.filter_high, receiver.filter_low);
+                        ConsoleService::log(&format!("js: {}", js));
+                        js_sys::eval(&js).unwrap();
 
-            // switch audio subscriptions if already subscribed
-            match self.audio.receiving_audio() {
-                Some(_) => {
-                    self.subscribe_to_audio();
+                        // update default receiver
+                        self.default_receiver = Some(receiver_id);
+
+                        // switch audio subscriptions if already subscribed
+                        match self.audio.receiving_audio() {
+                            Some(_) => {
+                                self.subscribe_to_audio();
+                            },
+                            None => ()
+                        }
+                    } else {
+                        ConsoleService::error(&format!("Attempted to set default receiver with invalid receiver id: {}", receiver_id));
+                    }
                 },
-                None => ()
+                None => {
+                    self.default_receiver = None;
+                    self.unsubscribe_to_audio();
+                    js_sys::eval("initWaterfallNav(null, null, null, null);").unwrap();
+                }
             }
         }
     }
 
     pub fn toggle_receiver_list(&mut self) {
         self.show_receiver_list = !self.show_receiver_list;
+    }
+
+    pub fn show_receiver_list(&mut self) {
+        self.show_receiver_list = true
+    }
+
+    pub fn hide_receiver_list(&mut self) {
+        self.show_receiver_list = false
     }
 
     pub fn read_file(&mut self, file: File) {
@@ -511,7 +540,7 @@ impl Model {
 
         html! {
             <>
-                <div style="text-align:right">
+                <div style="text-align:right;margin-top:10px">
                     <button class="button" onclick=self.link.callback(move |_| Msg::ClearSpots)>
                         <span class="icon is-small">
                             <i class="far fa-trash-alt"></i>
@@ -801,11 +830,6 @@ impl Model {
             } else {
                 ("receiver-control", false)
             };
-        let mute_unmute_class =
-            match self.audio.receiving_audio() {
-                Some(_) => "fas fa-volume-up",
-                _ => "fas fa-volume-mute"
-            };
         let mute_unmute_main_class =
             match self.audio.receiving_audio() {
                 Some(_) => "icon is-small",
@@ -861,7 +885,7 @@ impl Model {
                             html! {
                                 <button style="float:right" class="button is-text" onclick=self.link.callback(move |_| Msg::EnableAudio )>
                                     <span class=mute_unmute_main_class>
-                                        <span class=mute_unmute_class>{ format!(" ") }</span>
+                                        <i class="fas fa-volume-up"></i>
                                     </span>
                                 </button>
                             }

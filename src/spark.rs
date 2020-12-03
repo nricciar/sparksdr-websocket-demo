@@ -1,6 +1,24 @@
 use serde::{Deserialize};
-use ham_rs::rig::{Mode};
 use crate::spot::Spot;
+use ham_rs::{Mode};
+
+pub const RECEIVER_MODES: [Mode; 16] =
+    [Mode::DigiU,
+     Mode::DigiL,
+     Mode::USB,
+     Mode::LSB,
+     Mode::FT8,
+     Mode::FT4,
+     Mode::JT9,
+     Mode::AM,
+     Mode::FM,
+     Mode::NFM,
+     Mode::WSPR,
+     Mode::PSK,
+     Mode::Multipsk,
+     Mode::Sig,
+     Mode::Hell,
+     Mode::CW];
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Receiver {
@@ -10,6 +28,10 @@ pub struct Receiver {
     pub mode: Mode,
     #[serde(rename = "Frequency")] 
     pub frequency: f32,
+    #[serde(rename = "FilterLow")]
+    pub filter_low: f32,
+    #[serde(rename = "FilterHigh")]
+    pub filter_high: f32
 }
 
 impl Receiver {
@@ -67,7 +89,11 @@ pub enum CommandResponse {
         #[serde(rename = "Mode")]
         mode: Mode,
         #[serde(rename = "Frequency")]
-        frequency: f32
+        frequency: f32,
+        #[serde(rename = "FilterLow")]
+        filter_low: f32,
+        #[serde(rename = "FilterHigh")]
+        filter_high: f32,
     }
 }
 
