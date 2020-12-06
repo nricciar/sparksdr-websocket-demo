@@ -77,7 +77,7 @@ impl SpectrumProvider {
                 // make copy of current canvas
                 tmp_ctx.draw_image_with_html_canvas_element_and_dw_and_dh(&canvas, 0.0, 0.0, 2048.0, 200.0).unwrap();
 
-                let mut line = vec![255; 8192];
+                let mut line = vec![0; 8192];
                 let mut iter = line.chunks_exact_mut(4);
                 for i in 0..2047 {
                     // average pixel value over our buffer array

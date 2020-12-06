@@ -1,6 +1,5 @@
 use anyhow::Error;
-use serde::{Deserialize, Deserializer};
-use chrono::prelude::*;
+use serde::{Deserialize};
 use yew::services::fetch::{FetchTask};
 use yew::{ComponentLink};
 use yew::format::{Json,Text,Nothing};
@@ -9,19 +8,26 @@ use yew::services::storage::{Area, StorageService};
 use yew::services::{ConsoleService};
 use std::collections::HashMap;
 
-use ham_rs::{Call,Grid,CountryInfo,Country,LogEntry,Band,Mode};
+use ham_rs::{Call,CountryInfo,Country,LogEntry,Band};
 use ham_rs::lotw::LoTWStatus;
+use sparkplug::Spot;
 
 use crate::model::{Model,Msg};
-use crate::spark::{Receiver};
 
 const FILTERS_KEY: &str = "radio.spots.filters";
 const LOTW_USERS_KEY: &str = "radio.spots.lotwUsers";
+const STATES_OVERLAY_KEY: &str = "radio.spots.statesOverlay";
 
 #[derive(Debug, Serialize, Deserialize)]
 enum LoTWUsers {
     Disabled,
     Users(String)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum StatesOverlay {
+    Disabled,
+    GeoJson(String)
 }
 
 pub struct SpotDB {
@@ -34,6 +40,8 @@ pub struct SpotDB {
     callsigns: HashMap<String,CallsignInfo>,
     lotw_ft: Option<FetchTask>,
     lotw_users: LoTWUsers,
+    states_ft: Option<FetchTask>,
+    states_overlay: StatesOverlay
 }
 
 impl SpotDB {
@@ -54,6 +62,14 @@ impl SpotDB {
                 LoTWUsers::Disabled
             }
         };
+        let states_overlay = {
+            if let Json(Ok(entries)) = storage.restore(STATES_OVERLAY_KEY) {
+                ConsoleService::log("Restoring states overlay");
+                entries
+            } else {
+                StatesOverlay::Disabled
+            }
+        };
 
         SpotDB {
             storage,
@@ -63,6 +79,8 @@ impl SpotDB {
             callsigns: HashMap::new(),
             lotw_ft: None,
             lotw_users: lotw_users,
+            states_ft: None,
+            states_overlay: states_overlay
         }
     }
 
@@ -108,6 +126,53 @@ impl SpotDB {
         let request = Request::get("/out/lotw-users.dat").body(Nothing).unwrap();
         let ft = FetchService::fetch(request, callback).unwrap();            
         self.lotw_ft = Some(ft);
+    }
+
+    pub fn has_states_overlay(&self) -> bool {
+        match self.states_overlay {
+            StatesOverlay::GeoJson(_) => true,
+            StatesOverlay::Disabled => false,
+        }
+    }
+
+    pub fn update_states_overlay_js(&self) {
+        let js =
+            match &self.states_overlay {
+                StatesOverlay::GeoJson(overlay) if self.state_spot_filter_enabled() => format!("statesOverlay = {};statesHidden = false;updateStateOverlay();", overlay),
+                StatesOverlay::GeoJson(overlay) => format!("statesOverlay = {};statesHidden = true;updateStateOverlay();", overlay),
+                StatesOverlay::Disabled => format!("statesOverlay = null;statesHidden = true;updateStateOverlay();"),
+            };
+        
+        js_sys::eval(&js).unwrap();
+    }
+
+    pub fn import_states_overlay(&mut self, data: String) {
+        self.states_overlay = StatesOverlay::GeoJson(data);
+        self.states_ft = None;
+        self.storage.store(STATES_OVERLAY_KEY, Json(&self.states_overlay));
+        self.update_states_overlay_js();
+    }
+
+    pub fn fetch_states_overlay(&mut self, link: &ComponentLink<Model>) {
+        let callback = link.callback(
+            move |response: Response<Text>| {
+                let (meta, data) = response.into_parts();
+                match data {
+                    Ok(data) if meta.status.is_success() => {
+                        Msg::StatesOverlay(data)
+                    },
+                    _ => {
+                        ConsoleService::error("unable to fetch sates overlay");
+                        Msg::None
+                    }
+                }
+            },
+        );
+
+        ConsoleService::log("requesting states overlay");
+        let request = Request::get("/out/states.json").body(Nothing).unwrap();
+        let ft = FetchService::fetch(request, callback).unwrap();            
+        self.states_ft = Some(ft);
     }
 
     pub fn has_callsign_info(&mut self, call: &Call) -> Option<Call> {
@@ -191,7 +256,7 @@ impl SpotDB {
                                         let is_cq = spot.is_cq();
                                         match band.band() {
                                             Some(band_name) => {
-                                                js_sys::eval(&format!("addMarker({}, {}, \"{}\", {}, \"{}\", {}, {});", lat, lon, spot_on, spot.tuned_frequency, band_name, uses_lotw, is_cq)).unwrap();
+                                                js_sys::eval(&format!("addMarker(\"{}\", {}, {}, \"{}\", {}, \"{}\", {}, {}, \"{}\");", spot.call.call(), lat, lon, spot_on, spot.tuned_frequency, band_name, uses_lotw, is_cq, spot.mode.mode())).unwrap();
                                             },
                                             _ => (),
                                         }
@@ -303,85 +368,6 @@ pub enum CallsignInfo {
     Requested((Call, FetchTask)),
     Found(Call),
     NotFound(Call)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Spot {
-    pub time: DateTime<Utc>,
-    pub frequency: f32,
-    #[serde(rename = "tunedfrequency")]
-    pub tuned_frequency: f32,
-    pub power: i32,
-    pub drift: i32,
-    pub snr: i32,
-    pub dt: f32,
-    pub msg: Option<String>,
-    pub mode: Mode,
-    pub distance: Option<f32>,
-    #[serde(deserialize_with = "callsign_as_string")]
-    pub call: Call,
-    pub color: i32,
-    pub locator: Option<Grid>,
-    pub valid: bool
-}
-
-impl Spot {
-    pub fn set_call(&mut self, call: Call) {
-        self.call = call;
-    }
-
-    pub fn is_cq(&self) -> bool {
-        match &self.msg {
-            Some(msg) if msg.contains("CQ") => true,
-            _ => false,
-        }
-    }
-
-    pub fn current_rx(&self, rx: &Receiver) -> bool {
-        if self.tuned_frequency == rx.frequency && self.mode == rx.mode {
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn new_state(&self, logs: &Vec<LogEntry>) -> bool {
-        match (self.call.country(), self.call.state()) {
-            (Ok(country), Some(state)) if country == Country::UnitedStates => {
-                match logs.iter().position(|i| i.call.state() == Some(state.to_string())) {
-                    Some(_) => false,
-                    None => true,
-                }
-            },
-            _ => false,
-        }
-    }
-
-    pub fn new_country(&self, logs: &Vec<LogEntry>) -> bool {
-        match self.call.country() {
-            Ok(country) => {
-                match logs.iter().position(|i| i.call.country() == Ok(country.clone())) {
-                    Some(_) => false,
-                    None => true,
-                }
-            },
-            _ => false,
-        }
-    }
-
-    pub fn uses_lotw(&self) -> bool {
-        match self.call.lotw() {
-            LoTWStatus::Registered | LoTWStatus::LastUpload(_) => true,
-            _ => false
-        }
-    }
-}
-
-pub fn callsign_as_string<'de, D>(deserializer: D) -> Result<Call, D::Error>
-    where D: Deserializer<'de>
-{
-    let v : String = Deserialize::deserialize(deserializer)?;
-    Ok(Call::new(v))
 }
 
 impl CallsignInfo {

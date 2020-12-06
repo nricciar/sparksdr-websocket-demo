@@ -13,7 +13,8 @@ crate-type = ["cdylib"]
 yew = { version = "0.17.4", features = ["futures"] }
 yew-router = "0.14.0"
 wasm-bindgen = "0.2"
-ham-rs = { git = "https://github.com/nricciar/ham-rs", branch = "pre-release" }
+ham-rs = { git = "https://github.com/nricciar/ham-rs" }
+sparkplug = { git = "https://github.com/nricciar/sparkplug", branch = "main" }
 anyhow = "1"
 js-sys = "0.3"
 uuid = { version = "0.8", features = ["serde", "v4","wasm-bindgen"] }
@@ -21,7 +22,6 @@ serde = "1"
 serde_json = "1"
 serde_derive = "1"
 chrono = { version = "0.4.11", features = ["serde","wasmbind","js-sys"] }
-adif = { git = "https://github.com/davepacheco/rust-adif.git" }
 wasm-bindgen-futures = "0.4.18"
 
 [dependencies.web-sys]

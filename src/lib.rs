@@ -10,16 +10,15 @@ use web_sys::{HtmlCanvasElement};
 use js_sys::{DataView};
 
 use ham_rs::lotw::LoTWStatus;
+use sparkplug::{Command,CommandResponse};
 
 mod model;
-mod spark;
 mod color;
 mod spot;
 mod audio;
 mod spectrum;
 
 use model::{Model,Msg,AppRoute};
-use spark::{Command,CommandResponse};
 use spot::{SpotFilter};
 
 impl Component for Model {
@@ -244,6 +243,11 @@ impl Component for Model {
                 self.spots.import_lotw_users(users);
                 true
             },
+            Msg::StatesOverlay(geo_json) => {
+                ConsoleService::log("states overlay imported");
+                self.spots.import_states_overlay(geo_json);
+                false
+            },
             Msg::ToggleCQSpotFilter => {
                 match self.spots.cq_only_spot_filter_enabled() {
                     true => self.spots.remove_filter(SpotFilter::CQOnly).unwrap(),
@@ -261,8 +265,18 @@ impl Component for Model {
             Msg::ToggleStateSpotFilter => {
                 match self.spots.state_spot_filter_enabled() {
                     true => self.spots.remove_filter(SpotFilter::NewState).unwrap(),
-                    false => self.spots.add_filter(SpotFilter::NewState),
+                    false => {
+                        self.spots.add_filter(SpotFilter::NewState);
+
+                        match self.spots.has_states_overlay() {
+                            false => {
+                                self.spots.fetch_states_overlay(&self.link);
+                            },
+                            true => ()
+                        }
+                    },
                 }
+                self.spots.update_states_overlay_js();
                 true
             },
             Msg::ToggleCurrentReceiverSpotFilter => {
@@ -310,7 +324,7 @@ impl Component for Model {
         let (is_index, spectrum_style, map_style) =
             match AppRoute::switch(self.route.clone()) {
                 Some(AppRoute::Index) | None => (true, "position:relative;margin-top:10px", "height:0px;overflow:hidden;"),
-                _ => (false, "height:120px;overflow:hidden;position:relative;margin-top:10px", ""),
+                _ => (false, "height:110px;overflow:hidden;position:relative;margin-top:10px", ""),
             };
 
         match self.is_connected() {

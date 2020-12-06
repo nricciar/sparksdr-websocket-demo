@@ -1,4 +1,6 @@
 #map { margin-top: 10px }
+.leaflet-popup-content { margin: 10px !important }
+.leaflet-popup-content p { margin: 0 !important }
 .container .title { margin-top: 2em }
 .ws-connection { width:30em;margin-bottom:8em;padding-top:10px }
 .ws-connection input { margin-right:0.5em }
@@ -36,6 +38,7 @@
 .s { 
     margin-top:10px;
     max-height: 500px;
+    height: 500px;
     overflow: auto;
 }
 .spot-filters {

@@ -13,11 +13,11 @@ use std::str;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use ham_rs::{Call,CountryInfo,LogEntry,Mode};
+use ham_rs::{Call,Country,CountryInfo,LogEntry,Mode};
 use ham_rs::lotw::LoTWStatus;
 
-use crate::spark::{Command,CommandResponse,Receiver,Radio,Version,RECEIVER_MODES};
-use crate::spot::{Spot,SpotDB};
+use sparkplug::{Command,CommandResponse,Receiver,Radio,Version,RECEIVER_MODES,Spot};
+use crate::spot::{SpotDB};
 use crate::audio::{AudioProvider};
 use crate::spectrum::{SpectrumProvider};
 
@@ -131,6 +131,8 @@ pub enum Msg {
     CallsignInfoReady(Result<Call,Error>),
     // Response to our LoTW users request
     LotwUsers(String),
+    // States geoJson data
+    StatesOverlay(String),
     // Set/Unset various spot filters
     ToggleCQSpotFilter,
     ToggleStateSpotFilter,
@@ -160,7 +162,10 @@ impl Model {
                 _ => None
             };
 
-        Model {
+        let spot_db = SpotDB::new();
+        spot_db.update_states_overlay_js();
+
+        let model = Model {
             route_service,
             route,
             storage,
@@ -171,14 +176,38 @@ impl Model {
             radios: Vec::new(),
             default_receiver: None,
             version: None,
-            spots: SpotDB::new(),
+            spots: spot_db,
             audio: AudioProvider::new(),
             spectrum: SpectrumProvider::new(),
             show_receiver_list: false,
             import: entries,
             reader: ReaderService::new(),
             tasks: Vec::new(),
-        }
+        };
+
+        model.update_state_map_overlay();
+        model
+    }
+
+    fn update_state_map_overlay(&self) {
+        let (worked_states,lotw_states) =
+            match &self.import {
+                Some(import) => {
+                    let worked_states : Vec<String> = import.iter().filter(|i| i.call.country() == Ok(Country::UnitedStates) && i.call.state().is_some()).map(|i| i.call.state().unwrap() ).collect();
+                    let lotw_states : Vec<String> = import.iter().filter(|i| i.call.country() == Ok(Country::UnitedStates) && i.call.state().is_some() && i.lotw_qsl_rcvd).map(|i| i.call.state().unwrap() ).collect();
+                    (worked_states,lotw_states)
+                },
+                None => {
+                    (Vec::new(),Vec::new())
+                }
+            };
+
+        let worked_states_json = serde_json::to_string(&worked_states).unwrap();
+        let lotw_states_json = serde_json::to_string(&lotw_states).unwrap();
+
+        let js = format!("workedStates = {};lotwConfirmed = {};updateStateOverlay();", worked_states_json, lotw_states_json);
+        ConsoleService::debug(&format!("js: {}", js));
+        js_sys::eval(&js).unwrap();
     }
 
     // CommandResponse: getReceiversResponse
@@ -468,7 +497,7 @@ impl Model {
     }
 
     pub fn load_adif_data(&mut self, data: FileData) {
-        match adif::adif_parse("import", &mut data.content.as_slice()) {
+        match ham_rs::adif::adif_parse("import", &mut data.content.as_slice()) {
             Ok(adif) => {
                 let mut records = Vec::new();
                 for record in adif.adif_records.as_slice() {
@@ -483,6 +512,7 @@ impl Model {
                 }
                 self.import = Some(records);
                 self.storage.store(LOGBOOK_KEY, Json(&self.import));
+                self.update_state_map_overlay();
             },
             Err(e) => {
                 ConsoleService::error(&format!("unable to load adif: {}", e));
@@ -493,6 +523,7 @@ impl Model {
     pub fn clear_adif_data(&mut self) {
         self.import = None;
         self.storage.store(LOGBOOK_KEY, Json(&self.import));
+        self.update_state_map_overlay();
     }
 
     pub fn get_radio_power_state(&self, radio_id: u32) -> Option<bool> {
@@ -521,11 +552,13 @@ impl Model {
 
     pub fn receiver_list_control(&self) -> Html {
         html! {
+            <div class="receivers">
             {
                 for self.receivers.iter().map(|r| {
                     self.receiver(&r)
                 })
             }
+            </div>
         }
     }
 
@@ -714,7 +747,7 @@ impl Model {
                             },
                             Some(import) => html! {
                                 <>
-                                    <p>{ format!("Found {} contacts", import.len()) }</p>
+                                    <p>{ format!("Loaded {} contacts", import.len()) }</p>
                                     <p>
                                         <input type="button" class="button" value="Cancel Import" onclick=self.link.callback(|_| Msg::CancelImport) />
                                     </p>

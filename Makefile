@@ -23,9 +23,12 @@ db: tmp/lotw-user-activity.csv l_amat
 	cd tmp \
 		&& python3 ../scripts/import-en.py \
 		&& python3 ../scripts/import-lotw.py \
-		&& python3 ../scripts/import-am.py
+		&& python3 ../scripts/import-am.py \
+		&& python3 ../scripts/lotw-file.py
 	rm -rf static/out/
 	mv tmp/out static/
+	mv tmp/lotw-users.dat static/out/
+	cp scripts/states.json static/out/states.json
 
 clean:
 	rm -rf tmp/
